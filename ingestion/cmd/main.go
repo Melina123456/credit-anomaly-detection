@@ -5,8 +5,9 @@ import (
 	"log"
 	"os"
 
-	"github.com/joho/godotenv"
 	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/db"
+	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/generator"
+	"github.com/joho/godotenv"
 )
 
 func main() {
@@ -27,23 +28,17 @@ func main() {
 	defer rdb.Close()
 	log.Println("connected to redis")
 
-	// hardcoded test insert — replace with real generator tomorrow
-	var tenantID, featureID string
-	err = pgPool.QueryRow(ctx, `SELECT id FROM tenant LIMIT 1`).Scan(&tenantID)
+	tenants, features, err := generator.SeedTenantsAndFeatures(ctx, pgPool)
 	if err != nil {
-		log.Fatalf("no tenant found — insert a test tenant first: %v", err)
+		log.Fatalf("seeding failed: %v", err)
 	}
-	err = pgPool.QueryRow(ctx, `SELECT id FROM feature LIMIT 1`).Scan(&featureID)
-	if err != nil {
-		log.Fatalf("no feature found — insert a test feature first: %v", err)
-	}
+	log.Printf("seeded %d tenants, %d features", len(tenants), len(features))
 
-	_, err = pgPool.Exec(ctx, `
-		INSERT INTO usage_event (tenant_id, feature_id, quantity, occurred_at, source)
-		VALUES ($1, $2, $3, now(), 'manual-test')
-	`, tenantID, featureID, 5)
-	if err != nil {
+	events := generator.GenerateNormalEvents(tenants, features, 7, 10) // 7 days, 10 events/day/tenant/feature
+	log.Printf("generated %d synthetic events", len(events))
+
+	if err := generator.InsertEvents(ctx, pgPool, events); err != nil {
 		log.Fatalf("insert failed: %v", err)
 	}
-	log.Println("test usage_event inserted successfully")
+	log.Println("all events inserted successfully")
 }
