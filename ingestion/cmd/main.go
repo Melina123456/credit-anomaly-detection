@@ -90,4 +90,9 @@ func main() {
 	for _, n := range negBalance {
 		log.Printf("NEG_BALANCE: tenant=%s feature=%s qty=%.2f", n.TenantID, n.FeatureID, n.Quantity)
 	}
+
+	outOfOrder := generator.InjectOutOfOrderEvents(tenants, features, 5)
+	for _, o := range outOfOrder {
+		log.Printf("OUT_OF_ORDER: tenant=%s feature=%s qty=%.2f time=%s", o.TenantID, o.FeatureID, o.Quantity, o.OccurredAt)
+	}
 }

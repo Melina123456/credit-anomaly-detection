@@ -90,7 +90,11 @@ func InjectNegativeBalanceAttempts(ctx context.Context, pool *pgxpool.Pool, tena
 		}
 
 		// quantity deliberately exceeds current balance
-		quantity := balance + balance*0.5 + 100
+		absBalance := balance
+		if absBalance < 0 {
+			absBalance = -absBalance
+		}
+		quantity := absBalance + absBalance*0.5 + 500
 
 		anomalies = append(anomalies, AnomalyEvent{
 			TenantID:    t.ID,
@@ -101,4 +105,31 @@ func InjectNegativeBalanceAttempts(ctx context.Context, pool *pgxpool.Pool, tena
 		})
 	}
 	return anomalies, nil
+}
+
+// InjectOutOfOrderEvents creates events with occurred_at far in the past,
+// simulating backdated/late-arriving data.
+func InjectOutOfOrderEvents(tenants []Tenant, features []Feature, count int) []AnomalyEvent {
+	var anomalies []AnomalyEvent
+	now := time.Now().UTC()
+
+	for i := 0; i < count; i++ {
+		t := tenants[rand.Intn(len(tenants))]
+		f := features[rand.Intn(len(features))]
+		baseline := tierBaseline[t.PlanTier]
+
+		// normal-looking quantity, but backdated 20-40 days
+		daysBack := 20 + rand.Intn(20)
+		occurredAt := now.AddDate(0, 0, -daysBack)
+		quantity := baseline / 10 // roughly one normal event's worth
+
+		anomalies = append(anomalies, AnomalyEvent{
+			TenantID:    t.ID,
+			FeatureID:   f.ID,
+			Quantity:    quantity,
+			OccurredAt:  occurredAt,
+			AnomalyType: "out_of_order",
+		})
+	}
+	return anomalies
 }
