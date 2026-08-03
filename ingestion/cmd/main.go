@@ -71,4 +71,10 @@ func main() {
 		log.Fatalf("balance update failed: %v", err)
 	}
 	log.Printf("updated %d pool balances", balanceCount)
+
+	usageCount, err := cache.UpdateEntitlementUsage(ctx, pgPool)
+	if err != nil {
+		log.Fatalf("entitlement usage update failed: %v", err)
+	}
+	log.Printf("updated %d entitlement usage records", usageCount)
 }
