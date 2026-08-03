@@ -93,10 +93,9 @@ func SeedTenantsAndFeatures(ctx context.Context, pool *pgxpool.Pool) ([]Tenant, 
 }
 
 func SeedCreditPoolsAndGrants(ctx context.Context, pool *pgxpool.Pool, tenants []Tenant, features []Feature) error {
-	const startingBalance = 1000.0
+	const runwayDays = 30
 
 	for _, t := range tenants {
-		// create wallet
 		var poolID string
 		err := pool.QueryRow(ctx,
 			`INSERT INTO credit_pool (tenant_id, currency) VALUES ($1, 'credits') RETURNING id`,
@@ -105,7 +104,10 @@ func SeedCreditPoolsAndGrants(ctx context.Context, pool *pgxpool.Pool, tenants [
 			return err
 		}
 
-		// fund it — this IS the starting balance, recorded as a ledger entry
+		// starting balance = daily usage across all features × runway
+		dailyUsage := tierBaseline[t.PlanTier] * float64(len(features))
+		startingBalance := dailyUsage * runwayDays
+
 		_, err = pool.Exec(ctx, `
 			INSERT INTO credit_transaction (pool_id, amount, type)
 			VALUES ($1, $2, 'initial_grant')
@@ -114,7 +116,6 @@ func SeedCreditPoolsAndGrants(ctx context.Context, pool *pgxpool.Pool, tenants [
 			return err
 		}
 
-		// set daily limits per feature, a bit above normal usage
 		limit := tierBaseline[t.PlanTier] * 1.2
 		for _, f := range features {
 			_, err = pool.Exec(ctx, `

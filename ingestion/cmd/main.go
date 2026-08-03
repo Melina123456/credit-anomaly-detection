@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/cache"
 	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/db"
 	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/generator"
 	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/ledger"
@@ -64,4 +65,10 @@ func main() {
 		log.Fatalf("ledger write failed: %v", err)
 	}
 	log.Printf("wrote %d debit transactions to ledger", debitCount)
+
+	balanceCount, err := cache.UpdateCreditPoolBalances(ctx, pgPool)
+	if err != nil {
+		log.Fatalf("balance update failed: %v", err)
+	}
+	log.Printf("updated %d pool balances", balanceCount)
 }
