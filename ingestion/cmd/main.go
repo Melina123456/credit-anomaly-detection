@@ -7,6 +7,7 @@ import (
 
 	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/db"
 	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/generator"
+	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/ledger"
 	"github.com/joho/godotenv"
 )
 
@@ -57,4 +58,10 @@ func main() {
 		log.Fatalf("insert failed: %v", err)
 	}
 	log.Println("all events inserted successfully")
+
+	debitCount, err := ledger.WriteDebitsFromEvents(ctx, pgPool)
+	if err != nil {
+		log.Fatalf("ledger write failed: %v", err)
+	}
+	log.Printf("wrote %d debit transactions to ledger", debitCount)
 }
