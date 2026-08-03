@@ -73,26 +73,43 @@ func main() {
 	}
 	log.Printf("updated %d entitlement usage records", usageCount)
 
-	spikes := generator.InjectSpikes(tenants, features, 7, 5)
-	for _, s := range spikes {
-		log.Printf("SPIKE: tenant=%s feature=%s qty=%.2f", s.TenantID, s.FeatureID, s.Quantity)
-	}
+	// spikes := generator.InjectSpikes(tenants, features, 7, 5)
+	// for _, s := range spikes {
+	// 	log.Printf("SPIKE: tenant=%s feature=%s qty=%.2f", s.TenantID, s.FeatureID, s.Quantity)
+	// }
 
-	replays := generator.InjectReplays(events, 5)
-	for _, r := range replays {
-		log.Printf("REPLAY: tenant=%s feature=%s qty=%.2f time=%s", r.TenantID, r.FeatureID, r.Quantity, r.OccurredAt)
-	}
+	// replays := generator.InjectReplays(events, 5)
+	// for _, r := range replays {
+	// 	log.Printf("REPLAY: tenant=%s feature=%s qty=%.2f time=%s", r.TenantID, r.FeatureID, r.Quantity, r.OccurredAt)
+	// }
 
-	negBalance, err := generator.InjectNegativeBalanceAttempts(ctx, pgPool, tenants, features, 3)
+	// negBalance, err := generator.InjectNegativeBalanceAttempts(ctx, pgPool, tenants, features, 3)
+	// if err != nil {
+	// 	log.Fatalf("negative balance injection failed: %v", err)
+	// }
+	// for _, n := range negBalance {
+	// 	log.Printf("NEG_BALANCE: tenant=%s feature=%s qty=%.2f", n.TenantID, n.FeatureID, n.Quantity)
+	// }
+
+	// outOfOrder := generator.InjectOutOfOrderEvents(tenants, features, 5)
+	// for _, o := range outOfOrder {
+	// 	log.Printf("OUT_OF_ORDER: tenant=%s feature=%s qty=%.2f time=%s", o.TenantID, o.FeatureID, o.Quantity, o.OccurredAt)
+	// }
+
+	var allAnomalies []generator.AnomalyEvent
+	allAnomalies = append(allAnomalies, generator.InjectSpikes(tenants, features, 7, 15)...)
+	allAnomalies = append(allAnomalies, generator.InjectReplays(events, 15)...)
+
+	negBalance, err := generator.InjectNegativeBalanceAttempts(ctx, pgPool, tenants, features, 10)
 	if err != nil {
 		log.Fatalf("negative balance injection failed: %v", err)
 	}
-	for _, n := range negBalance {
-		log.Printf("NEG_BALANCE: tenant=%s feature=%s qty=%.2f", n.TenantID, n.FeatureID, n.Quantity)
-	}
+	allAnomalies = append(allAnomalies, negBalance...)
+	allAnomalies = append(allAnomalies, generator.InjectOutOfOrderEvents(tenants, features, 15)...)
 
-	outOfOrder := generator.InjectOutOfOrderEvents(tenants, features, 5)
-	for _, o := range outOfOrder {
-		log.Printf("OUT_OF_ORDER: tenant=%s feature=%s qty=%.2f time=%s", o.TenantID, o.FeatureID, o.Quantity, o.OccurredAt)
+	anomalyCount, err := generator.InsertAnomalies(ctx, pgPool, allAnomalies)
+	if err != nil {
+		log.Fatalf("anomaly insertion failed: %v", err)
 	}
+	log.Printf("inserted and labeled %d anomalies", anomalyCount)
 }

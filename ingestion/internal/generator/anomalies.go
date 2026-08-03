@@ -133,3 +133,30 @@ func InjectOutOfOrderEvents(tenants []Tenant, features []Feature, count int) []A
 	}
 	return anomalies
 }
+
+// InsertAnomalies writes each anomaly into usage_event, then labels it
+// in anomaly_label with its type.
+func InsertAnomalies(ctx context.Context, pool *pgxpool.Pool, anomalies []AnomalyEvent) (int, error) {
+	count := 0
+	for _, a := range anomalies {
+		var eventID string
+		err := pool.QueryRow(ctx, `
+			INSERT INTO usage_event (tenant_id, feature_id, quantity, occurred_at, source)
+			VALUES ($1, $2, $3, $4, 'synthetic_anomaly')
+			RETURNING id
+		`, a.TenantID, a.FeatureID, a.Quantity, a.OccurredAt).Scan(&eventID)
+		if err != nil {
+			return count, err
+		}
+
+		_, err = pool.Exec(ctx, `
+			INSERT INTO anomaly_label (usage_event_id, anomaly_type)
+			VALUES ($1, $2)
+		`, eventID, a.AnomalyType)
+		if err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
