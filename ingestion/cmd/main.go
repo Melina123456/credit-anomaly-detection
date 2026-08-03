@@ -72,4 +72,14 @@ func main() {
 		log.Fatalf("entitlement usage update failed: %v", err)
 	}
 	log.Printf("updated %d entitlement usage records", usageCount)
+
+	spikes := generator.InjectSpikes(tenants, features, 7, 5)
+	for _, s := range spikes {
+		log.Printf("SPIKE: tenant=%s feature=%s qty=%.2f", s.TenantID, s.FeatureID, s.Quantity)
+	}
+
+	replays := generator.InjectReplays(events, 5)
+	for _, r := range replays {
+		log.Printf("REPLAY: tenant=%s feature=%s qty=%.2f time=%s", r.TenantID, r.FeatureID, r.Quantity, r.OccurredAt)
+	}
 }
