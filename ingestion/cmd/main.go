@@ -82,4 +82,12 @@ func main() {
 	for _, r := range replays {
 		log.Printf("REPLAY: tenant=%s feature=%s qty=%.2f time=%s", r.TenantID, r.FeatureID, r.Quantity, r.OccurredAt)
 	}
+
+	negBalance, err := generator.InjectNegativeBalanceAttempts(ctx, pgPool, tenants, features, 3)
+	if err != nil {
+		log.Fatalf("negative balance injection failed: %v", err)
+	}
+	for _, n := range negBalance {
+		log.Printf("NEG_BALANCE: tenant=%s feature=%s qty=%.2f", n.TenantID, n.FeatureID, n.Quantity)
+	}
 }

@@ -1,8 +1,11 @@
 package generator
 
 import (
+	"context"
 	"math/rand"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type AnomalyEvent struct {
@@ -63,4 +66,39 @@ func InjectReplays(existing []EventSpec, count int) []AnomalyEvent {
 		})
 	}
 	return anomalies
+}
+
+// InjectNegativeBalanceAttempts creates single large events that exceed
+// a tenant's current balance, simulating an overspend attempt.
+func InjectNegativeBalanceAttempts(ctx context.Context, pool *pgxpool.Pool, tenants []Tenant, features []Feature, count int) ([]AnomalyEvent, error) {
+	var anomalies []AnomalyEvent
+	now := time.Now().UTC()
+
+	for i := 0; i < count; i++ {
+		t := tenants[rand.Intn(len(tenants))]
+		f := features[rand.Intn(len(features))]
+
+		// fetch current balance for this tenant
+		var balance float64
+		err := pool.QueryRow(ctx, `
+			SELECT cpb.balance FROM credit_pool_balance cpb
+			JOIN credit_pool cp ON cp.id = cpb.pool_id
+			WHERE cp.tenant_id = $1
+		`, t.ID).Scan(&balance)
+		if err != nil {
+			return nil, err
+		}
+
+		// quantity deliberately exceeds current balance
+		quantity := balance + balance*0.5 + 100
+
+		anomalies = append(anomalies, AnomalyEvent{
+			TenantID:    t.ID,
+			FeatureID:   f.ID,
+			Quantity:    quantity,
+			OccurredAt:  now,
+			AnomalyType: "negative_balance_attempt",
+		})
+	}
+	return anomalies, nil
 }
