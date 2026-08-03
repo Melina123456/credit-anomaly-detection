@@ -28,11 +28,27 @@ func main() {
 	defer rdb.Close()
 	log.Println("connected to redis")
 
-	tenants, features, err := generator.SeedTenantsAndFeatures(ctx, pgPool)
+	tenants, features, err := generator.GetOrSeedTenantsAndFeatures(ctx, pgPool)
 	if err != nil {
 		log.Fatalf("seeding failed: %v", err)
 	}
 	log.Printf("seeded %d tenants, %d features", len(tenants), len(features))
+
+	// if err := generator.SeedCreditPoolsAndGrants(ctx, pgPool, tenants, features); err != nil {
+	// 	log.Fatalf("seeding pools/grants failed: %v", err)
+	// }
+	// log.Println("seeded credit pools and entitlement grants")
+
+	var poolCount int
+	pgPool.QueryRow(ctx, `SELECT COUNT(*) FROM credit_pool`).Scan(&poolCount)
+	if poolCount == 0 {
+		if err := generator.SeedCreditPoolsAndGrants(ctx, pgPool, tenants, features); err != nil {
+			log.Fatalf("seeding pools/grants failed: %v", err)
+		}
+		log.Println("seeded credit pools and entitlement grants")
+	} else {
+		log.Println("credit pools already seeded, skipping")
+	}
 
 	events := generator.GenerateNormalEvents(tenants, features, 7, 10) // 7 days, 10 events/day/tenant/feature
 	log.Printf("generated %d synthetic events", len(events))
