@@ -36,11 +36,6 @@ func main() {
 	}
 	log.Printf("seeded %d tenants, %d features", len(tenants), len(features))
 
-	// if err := generator.SeedCreditPoolsAndGrants(ctx, pgPool, tenants, features); err != nil {
-	// 	log.Fatalf("seeding pools/grants failed: %v", err)
-	// }
-	// log.Println("seeded credit pools and entitlement grants")
-
 	var poolCount int
 	pgPool.QueryRow(ctx, `SELECT COUNT(*) FROM credit_pool`).Scan(&poolCount)
 	if poolCount == 0 {
