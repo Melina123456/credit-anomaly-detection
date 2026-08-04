@@ -11,3 +11,11 @@ def add_zscore_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df["z_score"] = (df["quantity"] - df["baseline_mean"]) / df["baseline_std"]
     return df
+
+def add_duplicate_features(df: pd.DataFrame) -> pd.DataFrame:
+    dup_counts = df.groupby(
+        ["tenant_id", "feature_id", "quantity", "occurred_at"]
+    ).size().reset_index(name="duplicate_count")
+
+    df = df.merge(dup_counts, on=["tenant_id", "feature_id", "quantity", "occurred_at"], how="left")
+    return df
