@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from app.db import fetch_usage_events
-from app.features import add_zscore_features
+from app.features import add_duplicate_features, add_zscore_features
 
 
 app = FastAPI()
@@ -22,5 +22,10 @@ def debug_events():
 def debug_features():
     df = fetch_usage_events()
     df = add_zscore_features(df)
-    top = df.sort_values("z_score", ascending=False).head(5)
-    return top[["tenant_id", "feature_id", "quantity", "z_score"]].to_dict(orient="records")
+    df = add_duplicate_features(df)
+
+    dupes = df[df["duplicate_count"] > 1]
+    return {
+        "duplicate_rows_found": len(dupes),
+        "sample": dupes[["tenant_id", "feature_id", "quantity", "occurred_at", "duplicate_count"]].head(5).to_dict(orient="records")
+    }
