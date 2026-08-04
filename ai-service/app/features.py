@@ -19,3 +19,8 @@ def add_duplicate_features(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.merge(dup_counts, on=["tenant_id", "feature_id", "quantity", "occurred_at"], how="left")
     return df
+
+
+def add_lag_feature(df: pd.DataFrame) -> pd.DataFrame:
+    df["ingestion_lag_days"] = (df["ingested_at"] - df["occurred_at"]).dt.total_seconds() / 86400
+    return df
