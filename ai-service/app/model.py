@@ -1,0 +1,18 @@
+from sklearn.ensemble import IsolationForest
+import pandas as pd
+
+def train_isolation_forest(df: pd.DataFrame) -> pd.DataFrame:
+    features = df[["z_score", "duplicate_count", "ingestion_lag_days"]].fillna(0)
+
+    model = IsolationForest(
+        n_estimators=100,
+        contamination=0.05,  # rough guess: ~5% of data is anomalous
+        random_state=42
+    )
+    model.fit(features)
+
+    # -1 = anomaly, 1 = normal (sklearn convention)
+    df["model_flag"] = model.predict(features)
+    df["anomaly_score"] = model.decision_function(features)
+
+    return df
