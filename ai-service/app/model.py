@@ -2,12 +2,12 @@ from sklearn.ensemble import IsolationForest
 import pandas as pd
 from pyod.models.lof import LOF
 
-def train_isolation_forest(df: pd.DataFrame) -> pd.DataFrame:
+def train_isolation_forest(df: pd.DataFrame,contamination: float = 0.05) -> pd.DataFrame:
     features = df[["z_score", "duplicate_count", "ingestion_lag_days"]].fillna(0)
 
     model = IsolationForest(
         n_estimators=100,
-        contamination=0.05,  # rough guess: ~5% of data is anomalous
+        contamination=contamination,  
         random_state=42
     )
     model.fit(features)
