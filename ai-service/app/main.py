@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from app.db import fetch_usage_events
 from app.features import add_duplicate_features, add_lag_feature, add_zscore_features
-from app.model import train_isolation_forest
+from app.model import train_isolation_forest, train_lof
 from app.db import fetch_usage_events_with_labels
 from app.evaluate import evaluate_model
 
@@ -70,3 +70,21 @@ def debug_missed():
 
     missed = df[(df["is_anomaly"] == True) & (df["model_flag"] != -1)]
     return missed[["tenant_id", "anomaly_type", "quantity", "z_score", "duplicate_count", "ingestion_lag_days", "anomaly_score"]].to_dict(orient="records")
+
+@app.get("/debug/compare")
+def debug_compare():
+    df = fetch_usage_events_with_labels()
+    df = add_zscore_features(df)
+    df = add_duplicate_features(df)
+    df = add_lag_feature(df)
+
+    df = train_isolation_forest(df)
+    df = train_lof(df)
+
+    iso_results = evaluate_model(df, pred_col="model_flag", anomaly_value=-1)
+    lof_results = evaluate_model(df, pred_col="lof_flag", anomaly_value=1)
+
+    return {
+        "isolation_forest": iso_results,
+        "lof": lof_results
+    }

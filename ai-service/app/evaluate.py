@@ -1,8 +1,8 @@
 from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
 
-def evaluate_model(df):
+def evaluate_model(df, pred_col="model_flag", anomaly_value=-1):
     y_true = df["is_anomaly"]
-    y_pred = df["model_flag"] == -1  # True if model flagged it
+    y_pred = df[pred_col] == anomaly_value
 
     precision = precision_score(y_true, y_pred)
     recall = recall_score(y_true, y_pred)
