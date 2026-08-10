@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from app.db import fetch_usage_events
 from app.features import add_duplicate_features, add_lag_feature, add_zscore_features
 from app.model import train_isolation_forest
+from app.db import fetch_usage_events_with_labels
+from app.evaluate import evaluate_model
 
 
 app = FastAPI()
@@ -45,3 +47,26 @@ def debug_model():
         "flagged_count": len(flagged),
         "sample_flagged": flagged[["tenant_id", "quantity", "z_score", "duplicate_count", "ingestion_lag_days", "anomaly_score"]].head(5).to_dict(orient="records")
     }
+
+
+@app.get("/debug/evaluate")
+def debug_evaluate():
+    df = fetch_usage_events_with_labels()
+    df = add_zscore_features(df)
+    df = add_duplicate_features(df)
+    df = add_lag_feature(df)
+    df = train_isolation_forest(df)
+
+    return evaluate_model(df)
+
+
+@app.get("/debug/missed")
+def debug_missed():
+    df = fetch_usage_events_with_labels()
+    df = add_zscore_features(df)
+    df = add_duplicate_features(df)
+    df = add_lag_feature(df)
+    df = train_isolation_forest(df)
+
+    missed = df[(df["is_anomaly"] == True) & (df["model_flag"] != -1)]
+    return missed[["tenant_id", "anomaly_type", "quantity", "z_score", "duplicate_count", "ingestion_lag_days", "anomaly_score"]].to_dict(orient="records")
