@@ -4,6 +4,7 @@ from app.features import add_duplicate_features, add_lag_feature, add_zscore_fea
 from app.model import train_isolation_forest, train_lof, explain_with_shap
 from app.db import fetch_usage_events_with_labels
 from app.evaluate import evaluate_model
+from app.analyze import build_analysis
 
 
 app = FastAPI()
@@ -140,3 +141,19 @@ def debug_explain_all():
     )
 
     return summary.reset_index().to_dict(orient="records")
+
+
+@app.get("/analyze/{event_id}")
+def analyze_event(event_id: str):
+    df = fetch_usage_events_with_labels()
+    df = add_zscore_features(df)
+    df = add_duplicate_features(df)
+    df = add_lag_feature(df)
+    df, model = train_isolation_forest(df)
+
+    shap_values = explain_with_shap(model, df)
+    result = build_analysis(df, shap_values, event_id)
+
+    if result is None:
+        return {"error": "event not found"}
+    return result
