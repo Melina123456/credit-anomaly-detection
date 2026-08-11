@@ -117,3 +117,26 @@ def debug_explain():
             "ingestion_lag_days": float(shap_values[flagged_idx][2]),
         }
     }
+
+
+@app.get("/debug/explain-all")
+def debug_explain_all():
+    df = fetch_usage_events_with_labels()
+    df = add_zscore_features(df)
+    df = add_duplicate_features(df)
+    df = add_lag_feature(df)
+    df, model = train_isolation_forest(df)
+
+    shap_values = explain_with_shap(model, df)
+
+    flagged = df[df["model_flag"] == -1].copy()
+    flagged["shap_zscore"] = [shap_values[i][0] for i in flagged.index]
+    flagged["shap_duplicate"] = [shap_values[i][1] for i in flagged.index]
+    flagged["shap_lag"] = [shap_values[i][2] for i in flagged.index]
+
+    # average |SHAP value| per known anomaly type
+    summary = flagged.groupby("anomaly_type")[["shap_zscore", "shap_duplicate", "shap_lag"]].apply(
+        lambda x: x.abs().mean()
+    )
+
+    return summary.reset_index().to_dict(orient="records")
