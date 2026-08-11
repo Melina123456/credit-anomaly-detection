@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from app.db import fetch_usage_events
 from app.features import add_duplicate_features, add_lag_feature, add_zscore_features
-from app.model import train_isolation_forest, train_lof
+from app.model import train_isolation_forest, train_lof, explain_with_shap
 from app.db import fetch_usage_events_with_labels
 from app.evaluate import evaluate_model
 
@@ -39,7 +39,7 @@ def debug_model():
     df = add_zscore_features(df)
     df = add_duplicate_features(df)
     df = add_lag_feature(df)
-    df = train_isolation_forest(df)
+    df, model = train_isolation_forest(df)
 
     flagged = df[df["model_flag"] == -1]
     return {
@@ -55,7 +55,7 @@ def debug_evaluate():
     df = add_zscore_features(df)
     df = add_duplicate_features(df)
     df = add_lag_feature(df)
-    df = train_isolation_forest(df)
+    df, model = train_isolation_forest(df)
 
     return evaluate_model(df)
 
@@ -66,7 +66,7 @@ def debug_missed():
     df = add_zscore_features(df)
     df = add_duplicate_features(df)
     df = add_lag_feature(df)
-    df = train_isolation_forest(df)
+    df, model = train_isolation_forest(df)
 
     missed = df[(df["is_anomaly"] == True) & (df["model_flag"] != -1)]
     return missed[["tenant_id", "anomaly_type", "quantity", "z_score", "duplicate_count", "ingestion_lag_days", "anomaly_score"]].to_dict(orient="records")
@@ -78,7 +78,7 @@ def debug_compare():
     df = add_duplicate_features(df)
     df = add_lag_feature(df)
 
-    df = train_isolation_forest(df)
+    df, model = train_isolation_forest(df)
     df = train_lof(df)
 
     iso_results = evaluate_model(df, pred_col="model_flag", anomaly_value=-1)
@@ -87,4 +87,33 @@ def debug_compare():
     return {
         "isolation_forest": iso_results,
         "lof": lof_results
+    }
+
+
+@app.get("/debug/explain")
+def debug_explain():
+    df = fetch_usage_events_with_labels()
+    df = add_zscore_features(df)
+    df = add_duplicate_features(df)
+    df = add_lag_feature(df)
+    df, model = train_isolation_forest(df)
+
+
+    shap_values = explain_with_shap(model, df)
+
+    # pick one flagged anomaly to explain
+    flagged_idx = df[df["model_flag"] == -1].index[0]
+
+    return {
+        "tenant_id": str(df.loc[flagged_idx, "tenant_id"]),
+        "anomaly_type": str(df.loc[flagged_idx, "anomaly_type"]),
+        "quantity": float(df.loc[flagged_idx, "quantity"]),
+        "z_score": float(df.loc[flagged_idx, "z_score"]),
+        "duplicate_count": int(df.loc[flagged_idx, "duplicate_count"]),
+        "ingestion_lag_days": float(df.loc[flagged_idx, "ingestion_lag_days"]),
+        "shap_values": {
+            "z_score": float(shap_values[flagged_idx][0]),
+            "duplicate_count": float(shap_values[flagged_idx][1]),
+            "ingestion_lag_days": float(shap_values[flagged_idx][2]),
+        }
     }
