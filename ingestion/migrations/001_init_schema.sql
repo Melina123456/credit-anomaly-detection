@@ -1,17 +1,17 @@
-CREATE TABLE tenant (
+CREATE TABLE IF NOT EXISTS tenant (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
     plan_tier TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE feature (
+CREATE TABLE IF NOT EXISTS feature (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     key TEXT NOT NULL UNIQUE,
     description TEXT
 );
 
-CREATE TABLE entitlement_grant (
+CREATE TABLE IF NOT EXISTS entitlement_grant (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenant(id),
     feature_id UUID NOT NULL REFERENCES feature(id),
@@ -20,7 +20,7 @@ CREATE TABLE entitlement_grant (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE credit_pool (
+CREATE TABLE IF NOT EXISTS credit_pool (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenant(id),
     currency TEXT NOT NULL DEFAULT 'credits',
@@ -28,7 +28,8 @@ CREATE TABLE credit_pool (
 );
 
 -- append-only ledger, source of truth
-CREATE TABLE credit_transaction (
+
+CREATE TABLE IF NOT EXISTS credit_transaction (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     pool_id UUID NOT NULL REFERENCES credit_pool(id),
     amount NUMERIC NOT NULL,
@@ -38,7 +39,7 @@ CREATE TABLE credit_transaction (
 );
 
 -- raw ingested events
-CREATE TABLE usage_event (
+CREATE TABLE IF NOT EXISTS usage_event (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenant(id),
     feature_id UUID NOT NULL REFERENCES feature(id),
@@ -49,13 +50,13 @@ CREATE TABLE usage_event (
 );
 
 -- materialized read caches, rebuilt from ledger, NOT source of truth
-CREATE TABLE credit_pool_balance (
+CREATE TABLE IF NOT EXISTS credit_pool_balance (
     pool_id UUID PRIMARY KEY REFERENCES credit_pool(id),
     balance NUMERIC NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE entitlement_usage (
+CREATE TABLE IF NOT EXISTS entitlement_usage (
     grant_id UUID PRIMARY KEY REFERENCES entitlement_grant(id),
     used NUMERIC NOT NULL DEFAULT 0,
     window_start TIMESTAMPTZ NOT NULL,
