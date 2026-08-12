@@ -23,6 +23,11 @@ func main() {
 	defer pgPool.Close()
 	log.Println("connected to postgres")
 
+	if err := db.RunMigrations(ctx, pgPool, "migrations"); err != nil {
+		log.Fatalf("migrations failed: %v", err)
+	}
+	log.Println("migrations applied")
+
 	rdb, err := db.NewRedisClient(ctx, os.Getenv("REDIS_ADDR"))
 	if err != nil {
 		log.Fatalf("redis connection failed: %v", err)
