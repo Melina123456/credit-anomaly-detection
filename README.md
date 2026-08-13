@@ -1,72 +1,110 @@
 # Multi-Service Credit & Entitlement Anomaly Detection
 
-Applied ML system for detecting anomalous usage/credit patterns in a 
-multi-tenant SaaS billing architecture. Extends a ledger-vs-cache 
-design pattern (append-only transaction ledger + materialized read 
-caches) with an ML anomaly detection layer and SHAP-based explainability.
+Detects anomalous usage patterns in a multi-tenant SaaS billing system, 
+with explainable AI (SHAP) showing *why* each anomaly was flagged.
 
-## Status: Week 1 — Infrastructure 
+Built on a ledger + materialized-cache architecture pattern used in 
+production billing systems — extended here with an ML anomaly detection 
+layer.
 
-## Architecture
-- `/ingestion` — Go service: event ingestion, ledger writes, cache updates
-- `/ai-service` — Python: anomaly detection models, SHAP explainability, API
+## Why this exists
 
-## Stack
-Go · Python (scikit-learn, PyOD, PyTorch, SHAP, FastAPI) · PostgreSQL · Redis · Docker
+Most anomaly detectors are black boxes. This one explains itself:
 
-## Note on data
-All data in this project is synthetically generated. No proprietary 
-schemas, data, or code from any employer are used.
-
-## Week 2 — Anomaly Detection Model
-
-### Features engineered
-- `z_score` — deviation from tenant+feature baseline (median/MAD, robust to outliers)
-- `duplicate_count` — flags replayed/duplicate events
-- `ingestion_lag_days` — flags backdated/out-of-order events
-
-### Models tried
-| Model | Precision | Recall | F1 |
-|---|---|---|---|
-| Isolation Forest | 0.753 | 1.0 | 0.859 |
-| Local Outlier Factor (LOF) | 0.740 | 0.982 | 0.844 |
-
-**Isolation Forest chosen** — caught 100% of labeled anomalies with fewer false positives.
-
-### Key finding
-Initial z-score used mean/std, which was skewed by extreme anomalies 
-(masking effect) — missed 6 real spikes. Fixed by switching to median/MAD 
-(robust statistics), improving recall from 0.891 → 1.0.
-
-
-## Week 3 — Explainability (SHAP)
-
-### Why
-An anomaly score alone isn't enough — a real system needs to explain 
-*why* something was flagged, both for trust and for debugging.
-
-### What was built
-- SHAP TreeExplainer wired into the Isolation Forest model
-- Verified each anomaly type is explained by its correct feature:
-
-| Anomaly Type | Dominant Feature | Avg |SHAP| |
-|---|---|---|
-| spike | z_score | 8.21 |
-| negative_balance_attempt | z_score | 7.42 |
-| replay | duplicate_count | 8.07 |
-| out_of_order | ingestion_lag_days | 8.98 |
-
-- `/analyze/{event_id}` — real endpoint returning prediction + plain-language reason
-
-### Example
-
-GET /analyze/1a8936a9-c691-4b37-9152-7305167ea98f
+GET /analyze/{event_id}
 
 {
 "is_anomaly": true,
 "top_reason": "usage quantity is unusually far from this tenant's normal baseline",
-"feature_contributions": {"z_score": -6.9, "duplicate_count": 0.11, "ingestion_lag_days": -0.75}
+"feature_contributions": {
+"z_score": -6.9,
+"duplicate_count": 0.11,
+"ingestion_lag_days": -0.75
+}
 }
 
-### Status
-Week 3 complete. Next: deployment + polish (Week 4)
+
+## Architecture
+
+┌─────────────┐ ┌──────────────┐ ┌────────────┐
+│ Go │────▶│ PostgreSQL │◀────│ Python │
+│ Ingestion │ │ (ledger + │ │ AI Service │
+│ Pipeline │ │ caches) │ │ (FastAPI) │
+└─────────────┘ └──────────────┘ └────────────┘
+│ │
+▼ ▼
+Generates synthetic Isolation Forest +
+events, writes ledger, SHAP explainability
+updates read caches
+
+
+**Ledger-vs-cache pattern:** `credit_transaction` is the append-only 
+source of truth. `credit_pool_balance` and `entitlement_usage` are 
+materialized read caches, rebuilt from the ledger — never edited directly.
+
+## Quick start
+
+```bash
+
+git clone https://github.com/Melina123456/credit-anomaly-detection.git
+cd credit-anomaly-detection
+docker-compose up --build
+```
+
+That's it. Migrations run automatically, synthetic data seeds itself, 
+and the AI service is live at `http://localhost:8000`.
+
+Try it:
+```bash
+curl http://localhost:8000/health
+curl http://localhost:8000/debug/events
+```
+
+## Anomaly types detected
+
+| Type | Signal | Example |
+|---|---|---|
+| Spike | `z_score` | Usage 10-20x normal baseline |
+| Replay | `duplicate_count` | Same event submitted twice |
+| Negative-balance attempt | `z_score` | Usage exceeding available credits |
+| Out-of-order | `ingestion_lag_days` | Event backdated 20-40 days |
+
+## Model performance
+
+| Model | Precision | Recall | F1 |
+|---|---|---|---|
+| **Isolation Forest** | 0.753 | 1.0 | 0.859 |
+| Local Outlier Factor | 0.740 | 0.982 | 0.844 |
+
+Isolation Forest chosen — caught 100% of labeled anomalies.
+
+## Explainability
+
+Every anomaly type is explained by its intended feature — verified with 
+average |SHAP value| per type:
+
+| Anomaly Type | Dominant Feature |
+|---|---|
+| spike | z_score (8.21) |
+| negative_balance_attempt | z_score (7.42) |
+| replay | duplicate_count (8.07) |
+| out_of_order | ingestion_lag_days (8.98) |
+
+## Tech stack
+
+Go · Python (FastAPI, scikit-learn, SHAP) · PostgreSQL · Redis · Docker
+
+## Data
+
+All data is synthetically generated. No proprietary schemas, data, or 
+code from any employer are used — only general architectural patterns.
+
+## Status
+
+Weeks 1-4 complete: ingestion pipeline, anomaly injection, ML model, 
+explainability layer, full Docker deployment.
+
+
+
+
+
