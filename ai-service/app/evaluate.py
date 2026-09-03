@@ -4,10 +4,17 @@ def evaluate_model(df, pred_col="model_flag", anomaly_value=-1):
     y_true = df["is_anomaly"]
     y_pred = df[pred_col] == anomaly_value
 
-    precision = precision_score(y_true, y_pred)
-    recall = recall_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred)
-    cm = confusion_matrix(y_true, y_pred)
+    # zero_division=0: if the model flags nothing (or nothing it flags is
+    # correct), precision/recall would otherwise raise a sklearn warning and
+    # silently fall back to 0 anyway — this makes that fallback explicit.
+    precision = precision_score(y_true, y_pred, zero_division=0)
+    recall = recall_score(y_true, y_pred, zero_division=0)
+    f1 = f1_score(y_true, y_pred, zero_division=0)
+    # labels=[False, True] pins the matrix to 2x2 even if one class is
+    # entirely absent from a given batch (e.g. a dataset with zero labeled
+    # anomalies) — without it, confusion_matrix shrinks to 1x1 and the
+    # indexing below throws IndexError.
+    cm = confusion_matrix(y_true, y_pred, labels=[False, True])
 
     return {
         "precision": round(precision, 3),
