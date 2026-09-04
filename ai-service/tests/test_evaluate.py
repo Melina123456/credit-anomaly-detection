@@ -1,6 +1,6 @@
 import pandas as pd
 
-from app.evaluate import evaluate_model
+from app.evaluate import evaluate_model, evaluate_by_type
 
 
 def test_perfect_predictions_score_1_across_the_board():
@@ -68,3 +68,42 @@ def test_alternate_pred_col_and_anomaly_value_for_lof_convention():
 
     assert result["precision"] == 1.0
     assert result["recall"] == 1.0
+
+
+def test_by_type_reports_recall_per_anomaly_type():
+    df = pd.DataFrame({
+        "anomaly_type": ["spike", "spike", "replay", "replay", None, None],
+        "model_flag":   [-1,      -1,      -1,       1,        1,    1],
+    })
+    # spike: 2/2 detected -> recall 1.0
+    # replay: 1/2 detected -> recall 0.5
+    # the two None rows are normal (unlabeled) events and must be excluded
+    # entirely, not counted as a third "None" type.
+
+    result = evaluate_by_type(df)
+
+    assert set(result.keys()) == {"spike", "replay"}
+    assert result["spike"] == {"total": 2, "detected": 2, "recall": 1.0}
+    assert result["replay"] == {"total": 2, "detected": 1, "recall": 0.5}
+
+
+def test_by_type_never_detected_gives_zero_recall_not_a_crash():
+    df = pd.DataFrame({
+        "anomaly_type": ["out_of_order", "out_of_order"],
+        "model_flag": [1, 1],  # model missed both
+    })
+
+    result = evaluate_by_type(df)
+
+    assert result["out_of_order"]["recall"] == 0.0
+
+
+def test_by_type_with_no_labeled_rows_returns_empty_dict():
+    df = pd.DataFrame({
+        "anomaly_type": [None, None],
+        "model_flag": [1, 1],
+    })
+
+    result = evaluate_by_type(df)
+
+    assert result == {}

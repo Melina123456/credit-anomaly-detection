@@ -27,3 +27,27 @@ def evaluate_model(df, pred_col="model_flag", anomaly_value=-1):
             "true_positive": int(cm[1][1]),
         }
     }
+
+
+def evaluate_by_type(df, pred_col="model_flag", anomaly_value=-1):
+    """Detection rate (recall) broken down by injected anomaly type.
+
+    Only meaningful for rows with a non-null anomaly_type — normal rows
+    aren't typed, so precision isn't computed per type here: a false
+    positive isn't "the wrong type", it's a normal event flagged at all,
+    which is already captured by the aggregate confusion matrix in
+    evaluate_model().
+    """
+    labeled = df[df["anomaly_type"].notna()]
+
+    results = {}
+    for anomaly_type, group in labeled.groupby("anomaly_type"):
+        flagged = group[pred_col] == anomaly_value
+        total = len(group)
+        detected = int(flagged.sum())
+        results[anomaly_type] = {
+            "total": total,
+            "detected": detected,
+            "recall": round(detected / total, 3),
+        }
+    return results

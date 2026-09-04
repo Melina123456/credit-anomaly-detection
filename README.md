@@ -102,6 +102,17 @@ cd ai-service
 
 Isolation Forest chosen — caught 100% of labeled anomalies.
 
+**Recall broken down by anomaly type** (`GET /debug/evaluate`, via `evaluate_by_type`), so the aggregate 100% recall figure isn't hiding a weak category:
+
+| Anomaly Type | Injected | Detected | Recall |
+|---|---|---|---|
+| spike | 30 | 30 | 1.0 |
+| replay | 30 | 30 | 1.0 |
+| negative_balance_attempt | 20 | 20 | 1.0 |
+| out_of_order | 30 | 30 | 1.0 |
+
+All 36 false positives (precision's cost: 110 true positives out of 146 total flags) came from normal events that happened to look anomalous — not from a specific anomaly type being under-detected.
+
 ## Explainability
 
 Every anomaly type is explained by its intended feature — verified with 
@@ -136,4 +147,3 @@ Being upfront about what this is *not* yet, since that matters more than the par
 - **Redis is connected but unused.** The ingestion service opens a Redis client at startup and never touches it again — it's in the `docker-compose.yml` stack and the tech list below, but isn't doing real work yet. Either it needs a real job (e.g. caching per-tenant baselines) or it should come out of the stack description.
 - **The `/debug/*` endpoints are unauthenticated** and return internals (raw feature values, per-type SHAP breakdowns). They're genuinely useful for development, but they'd need to be gated or removed before this ran anywhere with a real audience.
 - **Test coverage stops at the database boundary** — see [Testing & CI](#testing--ci) above.
-- **Evaluation is only reported in aggregate**, not broken down per anomaly type — so a 100% recall figure doesn't yet show whether "out-of-order" events are individually as well caught as "spikes."
