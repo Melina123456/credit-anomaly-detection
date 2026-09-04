@@ -3,7 +3,7 @@ from app.db import fetch_usage_events
 from app.features import add_duplicate_features, add_lag_feature, add_zscore_features
 from app.model import train_isolation_forest, train_lof, explain_with_shap
 from app.db import fetch_usage_events_with_labels
-from app.evaluate import evaluate_model
+from app.evaluate import evaluate_model, evaluate_by_type
 from app.analyze import build_analysis
 
 
@@ -58,7 +58,10 @@ def debug_evaluate():
     df = add_lag_feature(df)
     df, model = train_isolation_forest(df)
 
-    return evaluate_model(df)
+    return {
+        "aggregate": evaluate_model(df),
+        "by_type": evaluate_by_type(df),
+    }
 
 
 @app.get("/debug/missed")
