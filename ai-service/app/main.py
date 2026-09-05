@@ -1,11 +1,12 @@
 from fastapi import FastAPI, HTTPException
-from app.db import fetch_usage_events
+from app.db import fetch_usage_events, fetch_pool_balance_consistency
 from app.features import add_duplicate_features, add_lag_feature, add_zscore_features
 from app.model import train_isolation_forest, train_lof, predict_with_model, explain_with_shap
 from app.db import fetch_usage_events_with_labels
 from app.evaluate import evaluate_model, evaluate_by_type
 from app.analyze import build_analysis
 from app.registry import train_and_register, load_latest_model, add_all_features
+from app.consistency import check_pool_consistency
 
 
 app = FastAPI()
@@ -145,6 +146,16 @@ def debug_explain_all():
     )
 
     return summary.reset_index().to_dict(orient="records")
+
+
+@app.get("/debug/consistency-check")
+def consistency_check():
+    """Independently re-sums the ledger per pool and compares it against the
+    cached balance credit_pool_balance currently holds — proof the cache
+    hasn't drifted from its source of truth, rather than an assumption that
+    it hasn't."""
+    df = fetch_pool_balance_consistency()
+    return check_pool_consistency(df)
 
 
 @app.post("/train")
