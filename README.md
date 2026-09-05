@@ -44,6 +44,8 @@ updates read caches
 source of truth. `credit_pool_balance` and `entitlement_usage` are 
 materialized read caches, rebuilt from the ledger — never edited directly.
 
+**Proving the cache hasn't drifted:** `GET /debug/consistency-check` independently re-sums every pool's transactions from the ledger and compares that against what `credit_pool_balance` currently caches — instead of just trusting that the cache-rebuild code is bug-free. Verified by deliberately corrupting a cached balance by hand and confirming the endpoint caught the exact pool and the exact discrepancy, then confirming it went quiet again once restored.
+
 ## Model lifecycle (train/serve split)
 
 `/analyze` does **not** train a model per request. Instead:
@@ -76,6 +78,9 @@ curl http://localhost:8000/debug/events
 curl -X POST http://localhost:8000/train
 curl http://localhost:8000/model/current
 curl http://localhost:8000/analyze/{event_id}   # id from /debug/events above
+
+# confirm the balance cache still matches the ledger
+curl http://localhost:8000/debug/consistency-check
 ```
 
 ## Testing & CI
@@ -83,7 +88,7 @@ curl http://localhost:8000/analyze/{event_id}   # id from /debug/events above
 There's a GitHub Actions workflow (`.github/workflows/ci.yml`) that runs on every push and pull request:
 
 - **Go** — `go vet` + `go test ./...` for the ingestion module. Tests cover the synthetic-data generator (`internal/generator`): event counts, the documented value ranges for each anomaly type (e.g. spikes are 10x-20x baseline), and edge cases like an empty event list or an unrecognized plan tier.
-- **Python** — `pytest` for the AI service. Tests cover the pure feature-engineering and evaluation logic (`features.py`, `evaluate.py`, `analyze.py`, `registry.py`): the robust z-score math, duplicate detection, SHAP-reason selection, per-anomaly-type recall, and edge cases like a tenant whose usage never varies (zero MAD), a model that flags nothing at all (zero-division in precision/recall), or training being called with no data.
+- **Python** — `pytest` for the AI service. Tests cover the pure feature-engineering and evaluation logic (`features.py`, `evaluate.py`, `analyze.py`, `registry.py`, `consistency.py`): the robust z-score math, duplicate detection, SHAP-reason selection, per-anomaly-type recall, ledger/cache mismatch detection, and edge cases like a tenant whose usage never varies (zero MAD), a model that flags nothing at all (zero-division in precision/recall), or training being called with no data. All database access for the AI service is centralized in `db.py` — the other modules describe *what* they need ("the latest model run," "each pool's cached vs. ledger balance") without knowing *how* it's fetched, which is what keeps this pure-logic layer testable without a database at all.
 
 Run them locally:
 
@@ -98,7 +103,7 @@ cd ai-service
 ./venv/bin/pytest -v
 ```
 
-**What's *not* covered yet:** anything that touches Postgres or Redis directly — the ledger writer, the cache-rebuild functions, the DB-backed seeding, `registry.py`'s actual insert/select against `model_run`, and the FastAPI endpoints themselves. Those are exercised manually via `docker-compose up` today — including the model registry's persistence claim specifically, which was verified by training a model, fully removing and recreating the `ai-service` container, and confirming `/model/current` still resolved it. Testing this properly in CI would mean either spinning up a real Postgres (`services:` in the workflow, or a library like `testcontainers`) or introducing an interface to mock the database — both reasonable next steps, not yet done.
+**What's *not* covered yet:** anything that touches Postgres or Redis directly — the ledger writer, the cache-rebuild functions, the DB-backed seeding, and every function in `db.py` itself (`fetch_pool_balance_consistency`, `insert_model_run`, `fetch_latest_model_run`), plus the FastAPI endpoints. Those are exercised manually via `docker-compose up` today — including two claims specifically verified this way rather than assumed: the model registry's persistence (trained a model, fully removed and recreated the `ai-service` container, confirmed `/model/current` still resolved it) and the consistency check's ability to actually catch drift (corrupted a real cached balance by hand, confirmed the endpoint flagged the exact pool and amount, then confirmed it went quiet once restored). Testing this properly in CI would mean either spinning up a real Postgres (`services:` in the workflow, or a library like `testcontainers`) or introducing an interface to mock the database — both reasonable next steps, not yet done.
 
 ## Anomaly types detected
 
@@ -154,7 +159,8 @@ code from any employer are used — only general architectural patterns.
 
 Weeks 1-4 complete: ingestion pipeline, anomaly injection, ML model, 
 explainability layer, full Docker deployment, unit tests + CI, 
-persisted model registry with train/serve split.
+persisted model registry with train/serve split, 
+ledger/cache consistency verification.
 
 ## Known limitations
 

@@ -3,9 +3,8 @@ import time
 
 import joblib
 import pandas as pd
-from sqlalchemy import text
 
-from app.db import engine
+from app.db import insert_model_run, fetch_latest_model_run
 from app.features import add_zscore_features, add_duplicate_features, add_lag_feature
 from app.model import train_isolation_forest, FEATURE_COLUMNS
 from app.evaluate import evaluate_model, evaluate_by_type
@@ -45,28 +44,15 @@ def train_and_register(df_labeled: pd.DataFrame, contamination: float = 0.05) ->
     model_path = os.path.join(MODEL_DIR, filename)
     joblib.dump(model, model_path)
 
-    with engine.begin() as conn:
-        result = conn.execute(
-            text("""
-                INSERT INTO model_run
-                    (model_path, feature_set, training_row_count, contamination,
-                     precision_score, recall_score, f1_score)
-                VALUES
-                    (:model_path, :feature_set, :training_row_count, :contamination,
-                     :precision_score, :recall_score, :f1_score)
-                RETURNING id, trained_at
-            """),
-            {
-                "model_path": model_path,
-                "feature_set": ",".join(FEATURE_COLUMNS),
-                "training_row_count": len(df),
-                "contamination": contamination,
-                "precision_score": metrics["precision"],
-                "recall_score": metrics["recall"],
-                "f1_score": metrics["f1_score"],
-            },
-        )
-        row = result.fetchone()
+    row = insert_model_run(
+        model_path=model_path,
+        feature_set=",".join(FEATURE_COLUMNS),
+        training_row_count=len(df),
+        contamination=contamination,
+        precision_score=metrics["precision"],
+        recall_score=metrics["recall"],
+        f1_score=metrics["f1_score"],
+    )
 
     return {
         "id": str(row.id),
@@ -98,17 +84,7 @@ def load_latest_model():
     was wiped without the DB being wiped too) — treated the same as "no
     model" rather than crashing the caller.
     """
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("""
-                SELECT id, trained_at, model_path, feature_set, training_row_count,
-                       precision_score, recall_score, f1_score
-                FROM model_run
-                ORDER BY trained_at DESC
-                LIMIT 1
-            """)
-        )
-        row = result.fetchone()
+    row = fetch_latest_model_run()
 
     if row is None:
         return None, None
