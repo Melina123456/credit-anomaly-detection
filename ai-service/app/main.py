@@ -1,10 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from app.db import fetch_usage_events
 from app.features import add_duplicate_features, add_lag_feature, add_zscore_features
-from app.model import train_isolation_forest, train_lof, explain_with_shap
+from app.model import train_isolation_forest, train_lof, predict_with_model, explain_with_shap
 from app.db import fetch_usage_events_with_labels
 from app.evaluate import evaluate_model, evaluate_by_type
 from app.analyze import build_analysis
+from app.registry import train_and_register, load_latest_model, add_all_features
 
 
 app = FastAPI()
@@ -146,13 +147,45 @@ def debug_explain_all():
     return summary.reset_index().to_dict(orient="records")
 
 
+@app.post("/train")
+def train():
+    """Fit a fresh model on the current data, persist it, and record the run.
+
+    This is the only endpoint allowed to fit a model — everything else
+    (/analyze, /model/current) reads whatever this last produced. Call it
+    once after ingestion has run, and again whenever you want the served
+    model refreshed against new data.
+    """
+    df = fetch_usage_events_with_labels()
+    try:
+        return train_and_register(df)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/model/current")
+def model_current():
+    """Metadata for whichever model /analyze is currently serving from —
+    a minimal model card: when it was trained, on how much data, and how
+    it scored. Read-only; does not train anything."""
+    _, metadata = load_latest_model()
+    if metadata is None:
+        return {"trained": False, "message": "no model trained yet — call POST /train first"}
+    return {"trained": True, **metadata}
+
+
 @app.get("/analyze/{event_id}")
 def analyze_event(event_id: str):
+    model, _ = load_latest_model()
+    if model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="no trained model available yet — call POST /train first",
+        )
+
     df = fetch_usage_events_with_labels()
-    df = add_zscore_features(df)
-    df = add_duplicate_features(df)
-    df = add_lag_feature(df)
-    df, model = train_isolation_forest(df)
+    df = add_all_features(df)
+    df = predict_with_model(model, df)
 
     shap_values = explain_with_shap(model, df)
     result = build_analysis(df, shap_values, event_id)

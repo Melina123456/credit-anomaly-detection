@@ -44,6 +44,17 @@ updates read caches
 source of truth. `credit_pool_balance` and `entitlement_usage` are 
 materialized read caches, rebuilt from the ledger — never edited directly.
 
+## Model lifecycle (train/serve split)
+
+`/analyze` does **not** train a model per request. Instead:
+
+- `POST /train` fits `IsolationForest` on the current data, evaluates it, saves the fitted model to disk (`joblib`), and records the run — when, on how much data, with what precision/recall/F1 — as a row in the `model_run` table.
+- `GET /model/current` returns that record: a minimal "model card" for whatever's currently being served.
+- `GET /analyze/{event_id}` loads the most recently trained model and scores against it. If nothing has been trained yet, it returns `503` rather than silently training one — the point of separating train from serve is that scoring is never allowed to accidentally trigger training.
+- The model file lives in a named Docker volume (`ai_models`, mounted at `/app/models`), so it survives a container restart or even the container being removed and recreated — verified by actually doing that and re-checking `/model/current`, not assumed.
+
+The `/debug/*` endpoints are unchanged — they still fit a fresh, throwaway model on every call, deliberately. They exist for exploring the data and the model live, not for serving; `/train` and `/analyze` are the only path that reads and writes the persisted model.
+
 ## Quick start
 
 ```bash
@@ -60,6 +71,11 @@ Try it:
 ```bash
 curl http://localhost:8000/health
 curl http://localhost:8000/debug/events
+
+# train and persist a model, then ask it about a real event
+curl -X POST http://localhost:8000/train
+curl http://localhost:8000/model/current
+curl http://localhost:8000/analyze/{event_id}   # id from /debug/events above
 ```
 
 ## Testing & CI
@@ -67,7 +83,7 @@ curl http://localhost:8000/debug/events
 There's a GitHub Actions workflow (`.github/workflows/ci.yml`) that runs on every push and pull request:
 
 - **Go** — `go vet` + `go test ./...` for the ingestion module. Tests cover the synthetic-data generator (`internal/generator`): event counts, the documented value ranges for each anomaly type (e.g. spikes are 10x-20x baseline), and edge cases like an empty event list or an unrecognized plan tier.
-- **Python** — `pytest` for the AI service. Tests cover the pure feature-engineering and evaluation logic (`features.py`, `evaluate.py`, `analyze.py`): the robust z-score math, duplicate detection, SHAP-reason selection, and edge cases like a tenant whose usage never varies (zero MAD) or a model that flags nothing at all (zero-division in precision/recall).
+- **Python** — `pytest` for the AI service. Tests cover the pure feature-engineering and evaluation logic (`features.py`, `evaluate.py`, `analyze.py`, `registry.py`): the robust z-score math, duplicate detection, SHAP-reason selection, per-anomaly-type recall, and edge cases like a tenant whose usage never varies (zero MAD), a model that flags nothing at all (zero-division in precision/recall), or training being called with no data.
 
 Run them locally:
 
@@ -82,7 +98,7 @@ cd ai-service
 ./venv/bin/pytest -v
 ```
 
-**What's *not* covered yet:** anything that touches Postgres or Redis directly — the ledger writer, the cache-rebuild functions, the DB-backed seeding, and the FastAPI endpoints themselves. Those are exercised manually via `docker-compose up` today. Testing them properly would mean either spinning up a real Postgres in CI (`services:` in the workflow, or a library like `testcontainers`) or introducing an interface to mock the database — both reasonable next steps, not yet done.
+**What's *not* covered yet:** anything that touches Postgres or Redis directly — the ledger writer, the cache-rebuild functions, the DB-backed seeding, `registry.py`'s actual insert/select against `model_run`, and the FastAPI endpoints themselves. Those are exercised manually via `docker-compose up` today — including the model registry's persistence claim specifically, which was verified by training a model, fully removing and recreating the `ai-service` container, and confirming `/model/current` still resolved it. Testing this properly in CI would mean either spinning up a real Postgres (`services:` in the workflow, or a library like `testcontainers`) or introducing an interface to mock the database — both reasonable next steps, not yet done.
 
 ## Anomaly types detected
 
@@ -137,13 +153,15 @@ code from any employer are used — only general architectural patterns.
 ## Status
 
 Weeks 1-4 complete: ingestion pipeline, anomaly injection, ML model, 
-explainability layer, full Docker deployment, unit tests + CI.
+explainability layer, full Docker deployment, unit tests + CI, 
+persisted model registry with train/serve split.
 
 ## Known limitations
 
 Being upfront about what this is *not* yet, since that matters more than the parts that already work:
 
-- **The model retrains on every `/analyze` request** — it pulls the full `usage_event` table, refits `IsolationForest` from scratch, then predicts. That's fine for a demo-sized dataset, but it means no train/serve split, no persisted model file, and results can shift slightly as new synthetic data accumulates. A real next step: train once, persist with `joblib`, serve from the saved model, retrain on a schedule.
+- **Nothing triggers `/train` automatically.** There's no scheduled retraining and no auto-train-on-first-boot — you have to call `POST /train` yourself after data exists. That's intentional for now (an accidental training run on empty or partial data is worse than an explicit `503`), but a real deployment would want a scheduled job or a "retrain if data has grown by X%" trigger.
+- **No model versioning beyond "latest."** Every `/train` call adds a new row to `model_run` and a new file on disk (nothing is overwritten), but `/analyze` only ever reads the single most recent one — there's no way to pin, compare, or roll back to an older model yet. The history is there in the table; nothing reads it but the last row.
 - **Redis is connected but unused.** The ingestion service opens a Redis client at startup and never touches it again — it's in the `docker-compose.yml` stack and the tech list below, but isn't doing real work yet. Either it needs a real job (e.g. caching per-tenant baselines) or it should come out of the stack description.
 - **The `/debug/*` endpoints are unauthenticated** and return internals (raw feature values, per-type SHAP breakdowns). They're genuinely useful for development, but they'd need to be gated or removed before this ran anywhere with a real audience.
 - **Test coverage stops at the database boundary** — see [Testing & CI](#testing--ci) above.

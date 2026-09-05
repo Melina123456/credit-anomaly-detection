@@ -21,6 +21,9 @@ venv/
 # Docker
 pgdata/
 
+# Trained model artifacts (persisted via app/registry.py, tracked in the DB instead)
+ai-service/models/
+
 # IDE / editor
 .vscode/
 .idea/
