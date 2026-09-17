@@ -1,12 +1,12 @@
 from fastapi import FastAPI, HTTPException
 from app.db import fetch_usage_events, fetch_pool_balance_consistency
 from app.features import add_duplicate_features, add_lag_feature, add_zscore_features
-from app.model import train_isolation_forest, train_lof, predict_with_model, explain_with_shap
+from app.model import train_isolation_forest, train_lof, explain_with_shap
 from app.db import fetch_usage_events_with_labels
 from app.evaluate import evaluate_model, evaluate_by_type
-from app.analyze import build_analysis
-from app.registry import train_and_register, load_latest_model, add_all_features
+from app.registry import train_and_register, load_latest_model
 from app.consistency import check_pool_consistency
+from app.scoring import score_event
 
 
 app = FastAPI()
@@ -187,6 +187,10 @@ def model_current():
 
 @app.get("/analyze/{event_id}")
 def analyze_event(event_id: str):
+    """Scores exactly this one event: looks it up directly, scores it
+    against the cached baseline from the last POST /train, and explains it
+    with the persisted model — never reloads or recomputes over the whole
+    usage_event table."""
     model, _ = load_latest_model()
     if model is None:
         raise HTTPException(
@@ -194,12 +198,10 @@ def analyze_event(event_id: str):
             detail="no trained model available yet — call POST /train first",
         )
 
-    df = fetch_usage_events_with_labels()
-    df = add_all_features(df)
-    df = predict_with_model(model, df)
-
-    shap_values = explain_with_shap(model, df)
-    result = build_analysis(df, shap_values, event_id)
+    try:
+        result = score_event(model, event_id)
+    except LookupError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
     if result is None:
         return {"error": "event not found"}
