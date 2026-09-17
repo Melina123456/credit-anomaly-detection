@@ -25,20 +25,20 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
     environment:
       DATABASE_URL: postgres://admin:admin@postgres:5432/credit_anomaly
-      REDIS_ADDR: redis:6379
 
   ai-service:
     build: ./ai-service
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     environment:
       DATABASE_URL: postgresql://admin:admin@postgres:5432/credit_anomaly
       MODEL_DIR: /app/models
+      REDIS_ADDR: redis:6379
     volumes:
       - ai_models:/app/models
     ports:

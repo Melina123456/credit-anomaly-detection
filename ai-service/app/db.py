@@ -62,6 +62,48 @@ def fetch_pool_balance_consistency() -> pd.DataFrame:
     return pd.read_sql(query, get_engine())
 
 
+def fetch_event_by_id(event_id: str):
+    """One usage_event row (plus its anomaly_type if labeled), or None if no
+    such event exists. Used by app.scoring to score a single event without
+    pulling the entire usage_event table."""
+    with get_engine().connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT ue.id, ue.tenant_id, ue.feature_id, ue.quantity,
+                       ue.occurred_at, ue.ingested_at, al.anomaly_type
+                FROM usage_event ue
+                LEFT JOIN anomaly_label al ON al.usage_event_id = ue.id
+                WHERE ue.id = :event_id
+            """),
+            {"event_id": event_id},
+        )
+        return result.fetchone()
+
+
+def fetch_duplicate_count(tenant_id, feature_id, quantity, occurred_at) -> int:
+    """How many usage_event rows share this exact tenant/feature/quantity/
+    occurred_at combination, including the event itself — the same
+    replay-detection signal add_duplicate_features computes for the whole
+    table, but scoped to just one event's group."""
+    with get_engine().connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT COUNT(*) FROM usage_event
+                WHERE tenant_id = :tenant_id
+                  AND feature_id = :feature_id
+                  AND quantity = :quantity
+                  AND occurred_at = :occurred_at
+            """),
+            {
+                "tenant_id": tenant_id,
+                "feature_id": feature_id,
+                "quantity": quantity,
+                "occurred_at": occurred_at,
+            },
+        )
+        return result.scalar()
+
+
 def insert_model_run(model_path, feature_set, training_row_count, contamination,
                       precision_score, recall_score, f1_score):
     """Persist one training run and return the inserted row (id, trained_at)."""

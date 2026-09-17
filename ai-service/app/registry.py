@@ -8,6 +8,7 @@ from app.db import insert_model_run, fetch_latest_model_run
 from app.features import add_zscore_features, add_duplicate_features, add_lag_feature
 from app.model import train_isolation_forest, FEATURE_COLUMNS
 from app.evaluate import evaluate_model, evaluate_by_type
+from app.cache import set_baseline
 
 MODEL_DIR = os.getenv("MODEL_DIR", "models")
 
@@ -31,6 +32,7 @@ def train_and_register(df_labeled: pd.DataFrame, contamination: float = 0.05) ->
         raise ValueError("no usage events to train on")
 
     df = add_all_features(df_labeled)
+    _cache_baselines(df)
     df, model = train_isolation_forest(df, contamination=contamination)
 
     metrics = evaluate_model(df)
@@ -62,6 +64,17 @@ def train_and_register(df_labeled: pd.DataFrame, contamination: float = 0.05) ->
         "metrics": metrics,
         "by_type": by_type,
     }
+
+
+def _cache_baselines(df: pd.DataFrame) -> None:
+    """Save each tenant/feature's median & MAD into Redis, so /analyze can
+    score a single event without recomputing them from the whole table.
+    These are exactly the numbers add_zscore_features (called by
+    add_all_features, above) just computed as an intermediate step — this
+    isn't new work, just keeping a copy of work already done."""
+    baselines = df[["tenant_id", "feature_id", "baseline_median", "baseline_mad"]].drop_duplicates()
+    for row in baselines.itertuples(index=False):
+        set_baseline(row.tenant_id, row.feature_id, float(row.baseline_median), float(row.baseline_mad))
 
 
 def _row_to_metadata(row) -> dict:

@@ -28,13 +28,6 @@ func main() {
 	}
 	log.Println("migrations applied")
 
-	rdb, err := db.NewRedisClient(ctx, os.Getenv("REDIS_ADDR"))
-	if err != nil {
-		log.Fatalf("redis connection failed: %v", err)
-	}
-	defer rdb.Close()
-	log.Println("connected to redis")
-
 	tenants, features, err := generator.GetOrSeedTenantsAndFeatures(ctx, pgPool)
 	if err != nil {
 		log.Fatalf("seeding failed: %v", err)

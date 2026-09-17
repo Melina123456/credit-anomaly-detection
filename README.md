@@ -57,6 +57,16 @@ materialized read caches, rebuilt from the ledger — never edited directly.
 
 The `/debug/*` endpoints are unchanged — they still fit a fresh, throwaway model on every call, deliberately. They exist for exploring the data and the model live, not for serving; `/train` and `/analyze` are the only path that reads and writes the persisted model.
 
+## Baseline caching (Redis)
+
+`GET /analyze/{event_id}` used to pull the *entire* `usage_event` table just to score one event, because computing a tenant's "normal" baseline (median/MAD, see Explainability below) requires looking at their whole history. That cost didn't go away when the model itself got persisted — every `/analyze` call was still re-deriving every tenant's baseline from scratch.
+
+Now `POST /train` — which already computes every tenant/feature's baseline as a step in fitting the model — also writes each one to Redis (`baseline:{tenant_id}:{feature_id}` → `{median, mad}`). `/analyze` then does three cheap, targeted lookups instead of one expensive full-table scan: fetch just the one event by id, look up its tenant/feature's baseline in Redis, count exact duplicates of just that event. If a tenant/feature was never part of a training run, `/analyze` returns a clear `503` rather than silently falling back to a full recompute — same philosophy as "no model trained yet."
+
+This is Redis's first real job in this project — previously it was connected and never used (see the old entry in Known limitations, now removed). The Go ingestion service no longer touches Redis at all; caching baselines is specifically an AI-service concern, so keeping an unused connection on the Go side just to look busy would have been its own small piece of dishonesty.
+
+Honest performance note: on this project's small synthetic dataset (a few thousand rows), `/analyze` measured at ~0.3s either way — not a dramatic speedup yet. The real point isn't today's dataset, it's that the old approach got slower as `usage_event` grew (more rows to scan every single call), while this approach doesn't — a single Redis lookup costs the same whether there are a thousand events or a hundred million.
+
 ## Quick start
 
 ```bash
@@ -88,7 +98,7 @@ curl http://localhost:8000/debug/consistency-check
 There's a GitHub Actions workflow (`.github/workflows/ci.yml`) that runs on every push and pull request:
 
 - **Go** — `go vet` + `go test ./...` for the ingestion module. Tests cover the synthetic-data generator (`internal/generator`): event counts, the documented value ranges for each anomaly type (e.g. spikes are 10x-20x baseline), and edge cases like an empty event list or an unrecognized plan tier.
-- **Python** — `pytest` for the AI service. Tests cover the pure feature-engineering and evaluation logic (`features.py`, `evaluate.py`, `analyze.py`, `registry.py`, `consistency.py`): the robust z-score math, duplicate detection, SHAP-reason selection, per-anomaly-type recall, ledger/cache mismatch detection, and edge cases like a tenant whose usage never varies (zero MAD), a model that flags nothing at all (zero-division in precision/recall), or training being called with no data. All database access for the AI service is centralized in `db.py` — the other modules describe *what* they need ("the latest model run," "each pool's cached vs. ledger balance") without knowing *how* it's fetched, which is what keeps this pure-logic layer testable without a database at all.
+- **Python** — `pytest` for the AI service. Tests cover the pure feature-engineering and evaluation logic (`features.py`, `evaluate.py`, `analyze.py`, `registry.py`, `consistency.py`, `scoring.py`): the robust z-score math (both the bulk/training version and the single-event version used by `/analyze` — pinned to agree with each other), duplicate detection, SHAP-reason selection, per-anomaly-type recall, ledger/cache mismatch detection, and edge cases like a tenant whose usage never varies (zero MAD), a model that flags nothing at all (zero-division in precision/recall), or training being called with no data. All database access for the AI service is centralized in `db.py`, and all Redis access in `cache.py` — other modules describe *what* they need ("the latest model run," "this tenant's cached baseline") without knowing *how* it's fetched, which is what keeps this pure-logic layer testable without either infrastructure running at all.
 
 Run them locally:
 
@@ -103,7 +113,7 @@ cd ai-service
 ./venv/bin/pytest -v
 ```
 
-**What's *not* covered yet:** anything that touches Postgres or Redis directly — the ledger writer, the cache-rebuild functions, the DB-backed seeding, and every function in `db.py` itself (`fetch_pool_balance_consistency`, `insert_model_run`, `fetch_latest_model_run`), plus the FastAPI endpoints. Those are exercised manually via `docker-compose up` today — including two claims specifically verified this way rather than assumed: the model registry's persistence (trained a model, fully removed and recreated the `ai-service` container, confirmed `/model/current` still resolved it) and the consistency check's ability to actually catch drift (corrupted a real cached balance by hand, confirmed the endpoint flagged the exact pool and amount, then confirmed it went quiet once restored). Testing this properly in CI would mean either spinning up a real Postgres (`services:` in the workflow, or a library like `testcontainers`) or introducing an interface to mock the database — both reasonable next steps, not yet done.
+**What's *not* covered yet:** anything that touches Postgres or Redis directly — the ledger writer, the cache-rebuild functions, the DB-backed seeding, every function in `db.py` and `cache.py`, plus the FastAPI endpoints. Those are exercised manually via `docker-compose up` today — including several claims specifically verified this way rather than assumed: the model registry's persistence (trained a model, fully removed and recreated the `ai-service` container, confirmed `/model/current` still resolved it), the consistency check's ability to actually catch drift (corrupted a real cached balance by hand, confirmed the endpoint flagged the exact pool and amount), and the baseline cache actually being read from, not just written to (checked Redis directly with `redis-cli KEYS`/`GET` after training, confirmed real median/MAD values were there, then confirmed `/analyze` correctly scored both normal and labeled-anomaly events using them). Testing this properly in CI would mean either spinning up real Postgres and Redis instances (`services:` in the workflow, or a library like `testcontainers`) or introducing an interface to mock them — both reasonable next steps, not yet done.
 
 ## Anomaly types detected
 
@@ -160,7 +170,8 @@ code from any employer are used — only general architectural patterns.
 Weeks 1-4 complete: ingestion pipeline, anomaly injection, ML model, 
 explainability layer, full Docker deployment, unit tests + CI, 
 persisted model registry with train/serve split, 
-ledger/cache consistency verification.
+ledger/cache consistency verification, 
+Redis-backed baseline caching for single-event scoring.
 
 ## Known limitations
 
@@ -168,6 +179,6 @@ Being upfront about what this is *not* yet, since that matters more than the par
 
 - **Nothing triggers `/train` automatically.** There's no scheduled retraining and no auto-train-on-first-boot — you have to call `POST /train` yourself after data exists. That's intentional for now (an accidental training run on empty or partial data is worse than an explicit `503`), but a real deployment would want a scheduled job or a "retrain if data has grown by X%" trigger.
 - **No model versioning beyond "latest."** Every `/train` call adds a new row to `model_run` and a new file on disk (nothing is overwritten), but `/analyze` only ever reads the single most recent one — there's no way to pin, compare, or roll back to an older model yet. The history is there in the table; nothing reads it but the last row.
-- **Redis is connected but unused.** The ingestion service opens a Redis client at startup and never touches it again — it's in the `docker-compose.yml` stack and the tech list below, but isn't doing real work yet. Either it needs a real job (e.g. caching per-tenant baselines) or it should come out of the stack description.
+- **The baseline cache has no invalidation beyond the next `/train`.** If a brand-new tenant or feature gets seeded after the last training run, `/analyze` will correctly refuse with a 503 for it (no cached baseline) rather than guess — but that means it's stale-by-construction between training runs, same as the model itself. This is the same "nothing triggers `/train` automatically" limitation above, just visible in a second place now.
 - **The `/debug/*` endpoints are unauthenticated** and return internals (raw feature values, per-type SHAP breakdowns). They're genuinely useful for development, but they'd need to be gated or removed before this ran anywhere with a real audience.
 - **Test coverage stops at the database boundary** — see [Testing & CI](#testing--ci) above.
