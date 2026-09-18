@@ -1,4 +1,4 @@
-def build_analysis(df, shap_values, event_id: str):
+def build_analysis(df, shap_values, event_id: str, model_id: str = None):
     row = df[df["id"].astype(str) == event_id]
     if row.empty:
         return None
@@ -28,4 +28,5 @@ def build_analysis(df, shap_values, event_id: str):
         "anomaly_score": float(df.loc[idx, "anomaly_score"]),
         "top_reason": reason_text[top_reason] if is_flagged else None,
         "feature_contributions": shap_scores,
+        "model_id": model_id,
     }

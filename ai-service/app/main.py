@@ -204,8 +204,10 @@ def analyze_event(event_id: str):
     """Scores exactly this one event: looks it up directly, scores it
     against the cached baseline from the last POST /train, and explains it
     with the persisted model — never reloads or recomputes over the whole
-    usage_event table."""
-    model, _ = load_latest_model()
+    usage_event table. The response's model_id says exactly which /train
+    run produced this score — cross-reference it against GET /model/current
+    or the model_run table."""
+    model, metadata = load_latest_model()
     if model is None:
         raise HTTPException(
             status_code=503,
@@ -213,7 +215,7 @@ def analyze_event(event_id: str):
         )
 
     try:
-        result = score_event(model, event_id)
+        result = score_event(model, event_id, model_id=metadata["id"])
     except LookupError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
