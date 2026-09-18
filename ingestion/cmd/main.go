@@ -9,6 +9,7 @@ import (
 	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/db"
 	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/generator"
 	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/ledger"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
 
@@ -45,6 +46,19 @@ func main() {
 		log.Println("credit pools already seeded, skipping")
 	}
 
+	// Seeding is one-shot: this service runs on every `docker-compose up`, and
+	// without this guard each start appended another full batch of events and
+	// anomalies to the same volume. That silently grew the dataset and shifted
+	// every measured metric, so no result in the README was reproducible.
+	var eventCount int
+	if err := pgPool.QueryRow(ctx, `SELECT COUNT(*) FROM usage_event`).Scan(&eventCount); err != nil {
+		log.Fatalf("usage event count failed: %v", err)
+	}
+	if eventCount > 0 {
+		log.Printf("usage events already seeded (%d rows), skipping generation", eventCount)
+		return
+	}
+
 	events := generator.GenerateNormalEvents(tenants, features, 7, 10) // 7 days, 10 events/day/tenant/feature
 	log.Printf("generated %d synthetic events", len(events))
 
@@ -53,46 +67,12 @@ func main() {
 	}
 	log.Println("all events inserted successfully")
 
-	debitCount, err := ledger.WriteDebitsFromEvents(ctx, pgPool)
-	if err != nil {
-		log.Fatalf("ledger write failed: %v", err)
+	// Must run before anomalies are injected: InjectNegativeBalanceAttempts
+	// reads credit_pool_balance to pick a quantity that exceeds what the
+	// tenant actually has left.
+	if err := reconcileLedgerAndCaches(ctx, pgPool); err != nil {
+		log.Fatalf("ledger/cache reconciliation failed: %v", err)
 	}
-	log.Printf("wrote %d debit transactions to ledger", debitCount)
-
-	balanceCount, err := cache.UpdateCreditPoolBalances(ctx, pgPool)
-	if err != nil {
-		log.Fatalf("balance update failed: %v", err)
-	}
-	log.Printf("updated %d pool balances", balanceCount)
-
-	usageCount, err := cache.UpdateEntitlementUsage(ctx, pgPool)
-	if err != nil {
-		log.Fatalf("entitlement usage update failed: %v", err)
-	}
-	log.Printf("updated %d entitlement usage records", usageCount)
-
-	// spikes := generator.InjectSpikes(tenants, features, 7, 5)
-	// for _, s := range spikes {
-	// 	log.Printf("SPIKE: tenant=%s feature=%s qty=%.2f", s.TenantID, s.FeatureID, s.Quantity)
-	// }
-
-	// replays := generator.InjectReplays(events, 5)
-	// for _, r := range replays {
-	// 	log.Printf("REPLAY: tenant=%s feature=%s qty=%.2f time=%s", r.TenantID, r.FeatureID, r.Quantity, r.OccurredAt)
-	// }
-
-	// negBalance, err := generator.InjectNegativeBalanceAttempts(ctx, pgPool, tenants, features, 3)
-	// if err != nil {
-	// 	log.Fatalf("negative balance injection failed: %v", err)
-	// }
-	// for _, n := range negBalance {
-	// 	log.Printf("NEG_BALANCE: tenant=%s feature=%s qty=%.2f", n.TenantID, n.FeatureID, n.Quantity)
-	// }
-
-	// outOfOrder := generator.InjectOutOfOrderEvents(tenants, features, 5)
-	// for _, o := range outOfOrder {
-	// 	log.Printf("OUT_OF_ORDER: tenant=%s feature=%s qty=%.2f time=%s", o.TenantID, o.FeatureID, o.Quantity, o.OccurredAt)
-	// }
 
 	var allAnomalies []generator.AnomalyEvent
 	allAnomalies = append(allAnomalies, generator.InjectSpikes(tenants, features, 7, 15)...)
@@ -110,4 +90,35 @@ func main() {
 		log.Fatalf("anomaly insertion failed: %v", err)
 	}
 	log.Printf("inserted and labeled %d anomalies", anomalyCount)
+
+	// Anomaly rows are usage events too, so they need debits and cache entries
+	// of their own — otherwise a single seeding run leaves them unledgered.
+	if err := reconcileLedgerAndCaches(ctx, pgPool); err != nil {
+		log.Fatalf("ledger/cache reconciliation failed: %v", err)
+	}
+}
+
+// reconcileLedgerAndCaches writes a debit for every usage event that doesn't
+// have one yet, then rebuilds the read caches from the ledger. Safe to call
+// repeatedly — WriteDebitsFromEvents skips events already in the ledger.
+func reconcileLedgerAndCaches(ctx context.Context, pgPool *pgxpool.Pool) error {
+	debitCount, err := ledger.WriteDebitsFromEvents(ctx, pgPool)
+	if err != nil {
+		return err
+	}
+	log.Printf("wrote %d debit transactions to ledger", debitCount)
+
+	balanceCount, err := cache.UpdateCreditPoolBalances(ctx, pgPool)
+	if err != nil {
+		return err
+	}
+	log.Printf("updated %d pool balances", balanceCount)
+
+	usageCount, err := cache.UpdateEntitlementUsage(ctx, pgPool)
+	if err != nil {
+		return err
+	}
+	log.Printf("updated %d entitlement usage records", usageCount)
+
+	return nil
 }
