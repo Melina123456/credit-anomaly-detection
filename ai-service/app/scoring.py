@@ -17,7 +17,7 @@ def _compute_zscore(quantity: float, median: float, mad: float) -> float:
     return 0.6745 * (quantity - median) / safe_mad
 
 
-def score_event(model, event_id: str):
+def score_event(model, event_id: str, model_id: str = None):
     """Score exactly one event using its tenant/feature's cached baseline
     (written by the last POST /train), instead of recomputing baselines
     from the entire usage_event table just to look at one row.
@@ -54,4 +54,4 @@ def score_event(model, event_id: str):
     df = predict_with_model(model, df)
     shap_values = explain_with_shap(model, df)
 
-    return build_analysis(df, shap_values, event_id)
+    return build_analysis(df, shap_values, event_id, model_id=model_id)

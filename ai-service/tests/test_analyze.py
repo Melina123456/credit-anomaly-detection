@@ -62,3 +62,21 @@ def test_duplicate_dominant_reason_picks_duplicate_count():
     result = build_analysis(df, shap_values, "evt-1")
 
     assert result["top_reason"] == "this event appears to be a duplicate of another event"
+
+
+def test_model_id_defaults_to_none_when_not_passed():
+    df = _df()
+    shap_values = {0: [-6.9, 0.11, -0.75], 1: [0.01, 0.02, 0.01]}
+
+    result = build_analysis(df, shap_values, "evt-1")
+
+    assert result["model_id"] is None
+
+
+def test_model_id_is_passed_through_when_given():
+    df = _df()
+    shap_values = {0: [-6.9, 0.11, -0.75], 1: [0.01, 0.02, 0.01]}
+
+    result = build_analysis(df, shap_values, "evt-1", model_id="run-123")
+
+    assert result["model_id"] == "run-123"

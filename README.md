@@ -22,7 +22,8 @@ GET /analyze/{event_id}
 "z_score": -6.9,
 "duplicate_count": 0.11,
 "ingestion_lag_days": -0.75
-}
+},
+"model_id": "234c8d62-a013-46a9-bf35-a0ce9abd38f6"
 }
 
 
@@ -53,6 +54,7 @@ materialized read caches, rebuilt from the ledger — never edited directly.
 - `POST /train` fits `IsolationForest` on the current data, evaluates it, saves the fitted model to disk (`joblib`), and records the run — when, on how much data, with what precision/recall/F1 — as a row in the `model_run` table.
 - `GET /model/current` returns that record: a minimal "model card" for whatever's currently being served.
 - `GET /analyze/{event_id}` loads the most recently trained model and scores against it. If nothing has been trained yet, it returns `503` rather than silently training one — the point of separating train from serve is that scoring is never allowed to accidentally trigger training.
+- Every `/analyze` response includes `model_id`, the `model_run` row that produced it — so a result can always be traced back to exactly which trained model made the call, and cross-checked against `GET /model/current` or the run history in `model_run`. This doesn't add pinning or rollback (see Known limitations) — it just makes "which model said this" answerable instead of assumed.
 - The model file lives in a named Docker volume (`ai_models`, mounted at `/app/models`), so it survives a container restart or even the container being removed and recreated — verified by actually doing that and re-checking `/model/current`, not assumed.
 
 The `/debug/*` endpoints are unchanged — they still fit a fresh, throwaway model on every call, deliberately. They exist for exploring the data and the model live, not for serving; `/train` and `/analyze` are the only path that reads and writes the persisted model.
@@ -191,7 +193,7 @@ API-key protection on internal endpoints.
 Being upfront about what this is *not* yet, since that matters more than the parts that already work:
 
 - **Nothing triggers `/train` automatically.** There's no scheduled retraining and no auto-train-on-first-boot — you have to call `POST /train` yourself after data exists. That's intentional for now (an accidental training run on empty or partial data is worse than an explicit `503`), but a real deployment would want a scheduled job or a "retrain if data has grown by X%" trigger.
-- **No model versioning beyond "latest."** Every `/train` call adds a new row to `model_run` and a new file on disk (nothing is overwritten), but `/analyze` only ever reads the single most recent one — there's no way to pin, compare, or roll back to an older model yet. The history is there in the table; nothing reads it but the last row.
+- **No model versioning beyond "latest."** Every `/train` call adds a new row to `model_run` and a new file on disk (nothing is overwritten), and `/analyze` now reports which run's model (`model_id`) produced each result — but `/analyze` still only ever *scores against* the single most recent one, and there's no way to pin, compare, or roll back to an older model. The history is there in the table; nothing but the last row is ever served.
 - **The baseline cache has no invalidation beyond the next `/train`.** If a brand-new tenant or feature gets seeded after the last training run, `/analyze` will correctly refuse with a 503 for it (no cached baseline) rather than guess — but that means it's stale-by-construction between training runs, same as the model itself. This is the same "nothing triggers `/train` automatically" limitation above, just visible in a second place now.
 - **`ADMIN_API_KEY` is one shared static key**, not per-user auth — fine for gating dev-only endpoints today, not a substitute for real access control if this ever served more than one trusted operator. See [Protecting internal endpoints](#protecting-internal-endpoints) above.
 - **Test coverage stops at the database boundary** — see [Testing & CI](#testing--ci) above.
