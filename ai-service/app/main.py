@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, APIRouter
 from app.db import fetch_usage_events, fetch_pool_balance_consistency
 from app.features import add_duplicate_features, add_lag_feature, add_zscore_features
 from app.model import train_isolation_forest, train_lof, explain_with_shap
@@ -7,15 +7,22 @@ from app.evaluate import evaluate_model, evaluate_by_type
 from app.registry import train_and_register, load_latest_model
 from app.consistency import check_pool_consistency
 from app.scoring import score_event
+from app.auth import require_api_key
 
 
 app = FastAPI()
+
+# Every route on this router requires a valid X-API-Key header (see
+# app/auth.py). These endpoints expose internals (raw feature values,
+# per-type SHAP breakdowns, ledger/cache balances) meant for development,
+# not a real audience.
+debug_router = APIRouter(prefix="/debug", dependencies=[Depends(require_api_key)])
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-@app.get("/debug/events")
+@debug_router.get("/events")
 def debug_events():
     df = fetch_usage_events()
     return {
@@ -25,7 +32,7 @@ def debug_events():
     }
 
 
-@app.get("/debug/features")
+@debug_router.get("/features")
 def debug_features():
     df = fetch_usage_events()
     df = add_zscore_features(df)
@@ -36,7 +43,7 @@ def debug_features():
     return top_lag[["tenant_id", "feature_id", "occurred_at", "ingested_at", "ingestion_lag_days"]].to_dict(orient="records")
 
 
-@app.get("/debug/model")
+@debug_router.get("/model")
 def debug_model():
     df = fetch_usage_events()
     df = add_zscore_features(df)
@@ -52,7 +59,7 @@ def debug_model():
     }
 
 
-@app.get("/debug/evaluate")
+@debug_router.get("/evaluate")
 def debug_evaluate():
     df = fetch_usage_events_with_labels()
     df = add_zscore_features(df)
@@ -66,7 +73,7 @@ def debug_evaluate():
     }
 
 
-@app.get("/debug/missed")
+@debug_router.get("/missed")
 def debug_missed():
     df = fetch_usage_events_with_labels()
     df = add_zscore_features(df)
@@ -77,7 +84,7 @@ def debug_missed():
     missed = df[(df["is_anomaly"] == True) & (df["model_flag"] != -1)]
     return missed[["tenant_id", "anomaly_type", "quantity", "z_score", "duplicate_count", "ingestion_lag_days", "anomaly_score"]].to_dict(orient="records")
 
-@app.get("/debug/compare")
+@debug_router.get("/compare")
 def debug_compare():
     df = fetch_usage_events_with_labels()
     df = add_zscore_features(df)
@@ -96,7 +103,7 @@ def debug_compare():
     }
 
 
-@app.get("/debug/explain")
+@debug_router.get("/explain")
 def debug_explain():
     df = fetch_usage_events_with_labels()
     df = add_zscore_features(df)
@@ -125,7 +132,7 @@ def debug_explain():
     }
 
 
-@app.get("/debug/explain-all")
+@debug_router.get("/explain-all")
 def debug_explain_all():
     df = fetch_usage_events_with_labels()
     df = add_zscore_features(df)
@@ -148,7 +155,7 @@ def debug_explain_all():
     return summary.reset_index().to_dict(orient="records")
 
 
-@app.get("/debug/consistency-check")
+@debug_router.get("/consistency-check")
 def consistency_check():
     """Independently re-sums the ledger per pool and compares it against the
     cached balance credit_pool_balance currently holds — proof the cache
@@ -158,7 +165,10 @@ def consistency_check():
     return check_pool_consistency(df)
 
 
-@app.post("/train")
+app.include_router(debug_router)
+
+
+@app.post("/train", dependencies=[Depends(require_api_key)])
 def train():
     """Fit a fresh model on the current data, persist it, and record the run.
 
@@ -166,6 +176,10 @@ def train():
     (/analyze, /model/current) reads whatever this last produced. Call it
     once after ingestion has run, and again whenever you want the served
     model refreshed against new data.
+
+    Protected the same way as /debug/*: it's arguably the single most
+    sensitive endpoint in the service, since anyone who can call it can
+    replace the model every other request serves from.
     """
     df = fetch_usage_events_with_labels()
     try:

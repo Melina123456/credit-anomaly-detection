@@ -39,6 +39,9 @@ services:
       DATABASE_URL: postgresql://admin:admin@postgres:5432/credit_anomaly
       MODEL_DIR: /app/models
       REDIS_ADDR: redis:6379
+      # local-dev-only key gating /debug/* and /train — never reuse this
+      # value anywhere real; set your own via a real secret in production.
+      ADMIN_API_KEY: local-dev-only-key
     volumes:
       - ai_models:/app/models
     ports:

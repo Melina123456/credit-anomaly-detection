@@ -67,6 +67,14 @@ This is Redis's first real job in this project — previously it was connected a
 
 Honest performance note: on this project's small synthetic dataset (a few thousand rows), `/analyze` measured at ~0.3s either way — not a dramatic speedup yet. The real point isn't today's dataset, it's that the old approach got slower as `usage_event` grew (more rows to scan every single call), while this approach doesn't — a single Redis lookup costs the same whether there are a thousand events or a hundred million.
 
+## Protecting internal endpoints
+
+Every `/debug/*` route and `POST /train` now require an `X-API-Key` header matching the server's `ADMIN_API_KEY` environment variable — `app/auth.py`, applied via one shared FastAPI dependency rather than repeated on each route. `/train` is included even though it isn't under `/debug/`: it's arguably the single most sensitive endpoint in the service, since whoever can call it can replace the model every other request scores against.
+
+It fails **closed**: if `ADMIN_API_KEY` isn't set on the server at all, those routes return `503` for everyone rather than silently becoming open — a missing config should never be indistinguishable from "no auth needed." `GET /health`, `GET /model/current`, and `GET /analyze/{event_id}` stay open; they're the service's actual public surface, not internals.
+
+This is a shared static key, not real user-level auth — appropriate for gating "internal/dev-only" endpoints at this project's stage, not for a multi-tenant system where different callers need different permissions. That's a deliberately bigger feature for later, not an oversight here.
+
 ## Quick start
 
 ```bash
@@ -82,15 +90,19 @@ and the AI service is live at `http://localhost:8000`.
 Try it:
 ```bash
 curl http://localhost:8000/health
-curl http://localhost:8000/debug/events
+
+# /debug/* and /train require the X-API-Key header — docker-compose.yml
+# sets a fixed local-dev key so this works out of the box; see "Protecting
+# internal endpoints" below.
+curl -H "X-API-Key: local-dev-only-key" http://localhost:8000/debug/events
 
 # train and persist a model, then ask it about a real event
-curl -X POST http://localhost:8000/train
+curl -X POST -H "X-API-Key: local-dev-only-key" http://localhost:8000/train
 curl http://localhost:8000/model/current
 curl http://localhost:8000/analyze/{event_id}   # id from /debug/events above
 
 # confirm the balance cache still matches the ledger
-curl http://localhost:8000/debug/consistency-check
+curl -H "X-API-Key: local-dev-only-key" http://localhost:8000/debug/consistency-check
 ```
 
 ## Testing & CI
@@ -98,7 +110,7 @@ curl http://localhost:8000/debug/consistency-check
 There's a GitHub Actions workflow (`.github/workflows/ci.yml`) that runs on every push and pull request:
 
 - **Go** — `go vet` + `go test ./...` for the ingestion module. Tests cover the synthetic-data generator (`internal/generator`): event counts, the documented value ranges for each anomaly type (e.g. spikes are 10x-20x baseline), and edge cases like an empty event list or an unrecognized plan tier.
-- **Python** — `pytest` for the AI service. Tests cover the pure feature-engineering and evaluation logic (`features.py`, `evaluate.py`, `analyze.py`, `registry.py`, `consistency.py`, `scoring.py`): the robust z-score math (both the bulk/training version and the single-event version used by `/analyze` — pinned to agree with each other), duplicate detection, SHAP-reason selection, per-anomaly-type recall, ledger/cache mismatch detection, and edge cases like a tenant whose usage never varies (zero MAD), a model that flags nothing at all (zero-division in precision/recall), or training being called with no data. All database access for the AI service is centralized in `db.py`, and all Redis access in `cache.py` — other modules describe *what* they need ("the latest model run," "this tenant's cached baseline") without knowing *how* it's fetched, which is what keeps this pure-logic layer testable without either infrastructure running at all.
+- **Python** — `pytest` for the AI service. Tests cover the pure feature-engineering and evaluation logic (`features.py`, `evaluate.py`, `analyze.py`, `registry.py`, `consistency.py`, `scoring.py`, `auth.py`): the robust z-score math (both the bulk/training version and the single-event version used by `/analyze` — pinned to agree with each other), duplicate detection, SHAP-reason selection, per-anomaly-type recall, ledger/cache mismatch detection, and edge cases like a tenant whose usage never varies (zero MAD), a model that flags nothing at all (zero-division in precision/recall), training being called with no data, or the API key being missing/wrong/unconfigured (fail-closed, verified by test). All database access for the AI service is centralized in `db.py`, and all Redis access in `cache.py` — other modules describe *what* they need ("the latest model run," "this tenant's cached baseline") without knowing *how* it's fetched, which is what keeps this pure-logic layer testable without either infrastructure running at all.
 
 Run them locally:
 
@@ -171,7 +183,8 @@ Weeks 1-4 complete: ingestion pipeline, anomaly injection, ML model,
 explainability layer, full Docker deployment, unit tests + CI, 
 persisted model registry with train/serve split, 
 ledger/cache consistency verification, 
-Redis-backed baseline caching for single-event scoring.
+Redis-backed baseline caching for single-event scoring, 
+API-key protection on internal endpoints.
 
 ## Known limitations
 
@@ -180,5 +193,5 @@ Being upfront about what this is *not* yet, since that matters more than the par
 - **Nothing triggers `/train` automatically.** There's no scheduled retraining and no auto-train-on-first-boot — you have to call `POST /train` yourself after data exists. That's intentional for now (an accidental training run on empty or partial data is worse than an explicit `503`), but a real deployment would want a scheduled job or a "retrain if data has grown by X%" trigger.
 - **No model versioning beyond "latest."** Every `/train` call adds a new row to `model_run` and a new file on disk (nothing is overwritten), but `/analyze` only ever reads the single most recent one — there's no way to pin, compare, or roll back to an older model yet. The history is there in the table; nothing reads it but the last row.
 - **The baseline cache has no invalidation beyond the next `/train`.** If a brand-new tenant or feature gets seeded after the last training run, `/analyze` will correctly refuse with a 503 for it (no cached baseline) rather than guess — but that means it's stale-by-construction between training runs, same as the model itself. This is the same "nothing triggers `/train` automatically" limitation above, just visible in a second place now.
-- **The `/debug/*` endpoints are unauthenticated** and return internals (raw feature values, per-type SHAP breakdowns). They're genuinely useful for development, but they'd need to be gated or removed before this ran anywhere with a real audience.
+- **`ADMIN_API_KEY` is one shared static key**, not per-user auth — fine for gating dev-only endpoints today, not a substitute for real access control if this ever served more than one trusted operator. See [Protecting internal endpoints](#protecting-internal-endpoints) above.
 - **Test coverage stops at the database boundary** — see [Testing & CI](#testing--ci) above.
