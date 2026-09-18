@@ -204,3 +204,5 @@ Being upfront about what this is *not* yet, since that matters more than the par
 - **The baseline cache has no invalidation beyond the next `/train`.** If a brand-new tenant or feature gets seeded after the last training run, `/analyze` will correctly refuse with a 503 for it (no cached baseline) rather than guess — but that means it's stale-by-construction between training runs, same as the model itself. This is the same "nothing triggers `/train` automatically" limitation above, just visible in a second place now.
 - **`ADMIN_API_KEY` is one shared static key**, not per-user auth — fine for gating dev-only endpoints today, not a substitute for real access control if this ever served more than one trusted operator. See [Protecting internal endpoints](#protecting-internal-endpoints) above.
 - **Test coverage stops at the database boundary** — see [Testing & CI](#testing--ci) above.
+
+Which of these are being worked on next, and why, is in [ROADMAP.md](ROADMAP.md).
