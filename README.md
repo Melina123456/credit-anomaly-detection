@@ -140,23 +140,27 @@ cd ai-service
 
 ## Model performance
 
+Measured on one seeded dataset: 1,455 events, of which 55 are labeled anomalies (3.8%).
+
 | Model | Precision | Recall | F1 |
 |---|---|---|---|
 | **Isolation Forest** | 0.753 | 1.0 | 0.859 |
-| Local Outlier Factor | 0.740 | 0.982 | 0.844 |
+| Local Outlier Factor | 0.726 | 0.964 | 0.828 |
 
-Isolation Forest chosen — caught 100% of labeled anomalies.
+Isolation Forest chosen — caught 100% of labeled anomalies. The margin over LOF is narrow, but LOF's two misses are the more interesting result: both were replays (verified — they were the only two false negatives). Replays are *exact duplicates*, so they sit in unusually dense neighbourhoods, which is the one place a local-density score is structurally least likely to flag them. That's a plausible reading rather than a demonstrated one — two misses is far too small a sample to settle it, and testing it properly would mean varying replay volume and LOF's `n_neighbors` rather than asserting the mechanism from a single run.
 
 **Recall broken down by anomaly type** (`GET /debug/evaluate`, via `evaluate_by_type`), so the aggregate 100% recall figure isn't hiding a weak category:
 
 | Anomaly Type | Injected | Detected | Recall |
 |---|---|---|---|
-| spike | 30 | 30 | 1.0 |
-| replay | 30 | 30 | 1.0 |
-| negative_balance_attempt | 20 | 20 | 1.0 |
-| out_of_order | 30 | 30 | 1.0 |
+| spike | 15 | 15 | 1.0 |
+| replay | 15 | 15 | 1.0 |
+| negative_balance_attempt | 10 | 10 | 1.0 |
+| out_of_order | 15 | 15 | 1.0 |
 
-All 36 false positives (precision's cost: 110 true positives out of 146 total flags) came from normal events that happened to look anomalous — not from a specific anomaly type being under-detected.
+**Every false positive is forced by the `contamination` setting, not by a ranking mistake.** `IsolationForest` is told 5% of events are anomalous, so it flags exactly 5% of 1,455 = 73 events. Only 55 anomalies exist, and it finds all of them — so 73 − 55 = 18 flags *must* land on normal events no matter how well the model ranks. It reports exactly 18. Precision is therefore pinned at 55/73 = 0.753: it is a direct function of the gap between the true anomaly rate (3.8%) and the rate I hardcoded (5%), and no improvement to the model can move it while that parameter is wrong. See [Known limitations](#known-limitations) — choosing that parameter without labels is the unsolved problem here.
+
+**Reproducibility:** seeding is one-shot (see [Data](#data)), so these figures are stable across restarts. On a *fresh* volume the generator draws new random values, so Isolation Forest's numbers reproduce exactly — they're fixed by the arithmetic above — while LOF's shift by a point or two with the draw.
 
 ## Explainability
 
@@ -179,6 +183,8 @@ Go · Python (FastAPI, scikit-learn, SHAP) · PostgreSQL · Redis · Docker
 All data is synthetically generated. No proprietary schemas, data, or 
 code from any employer are used — only general architectural patterns.
 
+**Seeding is one-shot.** The ingestion service runs on every `docker-compose up`, so it checks whether `usage_event` is already populated and skips generation if so. Without that guard each restart appended another full batch to the same volume — the dataset grew silently, the labeled anomaly count grew with it, and every measured figure shifted, which meant no number in this README was reproducible. To regenerate from scratch, wipe the volumes explicitly: `docker-compose down -v`.
+
 ## Status
 
 Weeks 1-4 complete: ingestion pipeline, anomaly injection, ML model, 
@@ -192,6 +198,7 @@ API-key protection on internal endpoints.
 
 Being upfront about what this is *not* yet, since that matters more than the parts that already work:
 
+- **`contamination` is hardcoded, and it caps precision.** Both `IsolationForest` and LOF are told in advance that 5% of events are anomalous (`model.py`). The true labeled rate here is 3.8%, so the detector is required to flag more events than exist — and as shown under [Model performance](#model-performance), *every* false positive it reports is forced by that gap rather than by a ranking error. Precision can't exceed 0.753 while the parameter is wrong, no matter how good the model is. The uncomfortable part is that 3.8% is only knowable *because* this data is labeled; on real unlabeled data there's no principled way to pick the value, which is an open research problem rather than a TODO. Approaches that derive the threshold from the score distribution instead of taking it as input ([Ghosh et al., 2024](https://arxiv.org/abs/2411.08867)) are the direction worth reading here.
 - **Nothing triggers `/train` automatically.** There's no scheduled retraining and no auto-train-on-first-boot — you have to call `POST /train` yourself after data exists. That's intentional for now (an accidental training run on empty or partial data is worse than an explicit `503`), but a real deployment would want a scheduled job or a "retrain if data has grown by X%" trigger.
 - **No model versioning beyond "latest."** Every `/train` call adds a new row to `model_run` and a new file on disk (nothing is overwritten), and `/analyze` now reports which run's model (`model_id`) produced each result — but `/analyze` still only ever *scores against* the single most recent one, and there's no way to pin, compare, or roll back to an older model. The history is there in the table; nothing but the last row is ever served.
 - **The baseline cache has no invalidation beyond the next `/train`.** If a brand-new tenant or feature gets seeded after the last training run, `/analyze` will correctly refuse with a 503 for it (no cached baseline) rather than guess — but that means it's stale-by-construction between training runs, same as the model itself. This is the same "nothing triggers `/train` automatically" limitation above, just visible in a second place now.
