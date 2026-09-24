@@ -32,3 +32,10 @@ ai-service/models/
 
 # Logs
 *.log
+
+# Personal notes, not for the repo
+/NOTES.md
+/CV-project-section.md
+/CV-edits.md
+/INTERVIEW-PREP.md
+/INTERVIEW-PREP.pdf
