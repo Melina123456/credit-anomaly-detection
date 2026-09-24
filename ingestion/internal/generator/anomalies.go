@@ -18,21 +18,21 @@ type AnomalyEvent struct {
 
 // InjectSpikes creates a few events with abnormally high quantity
 // for random tenant/feature pairs, within the last `days` days.
-func InjectSpikes(tenants []Tenant, features []Feature, days int, count int) []AnomalyEvent {
+func InjectSpikes(rng *rand.Rand, tenants []Tenant, features []Feature, days int, count int) []AnomalyEvent {
 	var anomalies []AnomalyEvent
 	now := time.Now().UTC()
 
 	for i := 0; i < count; i++ {
-		t := tenants[rand.Intn(len(tenants))]
-		f := features[rand.Intn(len(features))]
+		t := tenants[rng.Intn(len(tenants))]
+		f := features[rng.Intn(len(features))]
 		baseline := tierBaseline[t.PlanTier]
 
 		// 10x to 20x normal daily baseline, in a single event
-		multiplier := 10 + rand.Float64()*10
+		multiplier := 10 + rng.Float64()*10
 		quantity := baseline * multiplier
 
-		d := rand.Intn(days)
-		offset := time.Duration(rand.Intn(24*60)) * time.Minute
+		d := rng.Intn(days)
+		offset := time.Duration(rng.Intn(24*60)) * time.Minute
 		dayStart := now.AddDate(0, 0, -d)
 		occurredAt := time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(), 0, 0, 0, 0, time.UTC).Add(offset)
 
@@ -49,14 +49,14 @@ func InjectSpikes(tenants []Tenant, features []Feature, days int, count int) []A
 
 // InjectReplays picks random existing events and duplicates them exactly,
 // simulating a replay/duplicate-submission attack.
-func InjectReplays(existing []EventSpec, count int) []AnomalyEvent {
+func InjectReplays(rng *rand.Rand, existing []EventSpec, count int) []AnomalyEvent {
 	var anomalies []AnomalyEvent
 	if len(existing) == 0 {
 		return anomalies
 	}
 
 	for i := 0; i < count; i++ {
-		e := existing[rand.Intn(len(existing))]
+		e := existing[rng.Intn(len(existing))]
 		anomalies = append(anomalies, AnomalyEvent{
 			TenantID:    e.TenantID,
 			FeatureID:   e.FeatureID,
@@ -70,13 +70,13 @@ func InjectReplays(existing []EventSpec, count int) []AnomalyEvent {
 
 // InjectNegativeBalanceAttempts creates single large events that exceed
 // a tenant's current balance, simulating an overspend attempt.
-func InjectNegativeBalanceAttempts(ctx context.Context, pool *pgxpool.Pool, tenants []Tenant, features []Feature, count int) ([]AnomalyEvent, error) {
+func InjectNegativeBalanceAttempts(ctx context.Context, pool *pgxpool.Pool, rng *rand.Rand, tenants []Tenant, features []Feature, count int) ([]AnomalyEvent, error) {
 	var anomalies []AnomalyEvent
 	now := time.Now().UTC()
 
 	for i := 0; i < count; i++ {
-		t := tenants[rand.Intn(len(tenants))]
-		f := features[rand.Intn(len(features))]
+		t := tenants[rng.Intn(len(tenants))]
+		f := features[rng.Intn(len(features))]
 
 		// fetch current balance for this tenant
 		var balance float64
@@ -109,17 +109,17 @@ func InjectNegativeBalanceAttempts(ctx context.Context, pool *pgxpool.Pool, tena
 
 // InjectOutOfOrderEvents creates events with occurred_at far in the past,
 // simulating backdated/late-arriving data.
-func InjectOutOfOrderEvents(tenants []Tenant, features []Feature, count int) []AnomalyEvent {
+func InjectOutOfOrderEvents(rng *rand.Rand, tenants []Tenant, features []Feature, count int) []AnomalyEvent {
 	var anomalies []AnomalyEvent
 	now := time.Now().UTC()
 
 	for i := 0; i < count; i++ {
-		t := tenants[rand.Intn(len(tenants))]
-		f := features[rand.Intn(len(features))]
+		t := tenants[rng.Intn(len(tenants))]
+		f := features[rng.Intn(len(features))]
 		baseline := tierBaseline[t.PlanTier]
 
 		// normal-looking quantity, but backdated 20-40 days
-		daysBack := 20 + rand.Intn(20)
+		daysBack := 20 + rng.Intn(20)
 		occurredAt := now.AddDate(0, 0, -daysBack)
 		quantity := baseline / 10 // roughly one normal event's worth
 

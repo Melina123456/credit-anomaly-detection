@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"log"
+	"math/rand"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/cache"
 	"github.com/Melina123456/credit-anomaly-detection/ingestion/internal/db"
@@ -12,6 +15,22 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
+
+// newRNG builds the single *rand.Rand threaded through every generator call.
+// SEED makes a run reproducible; without it, results still work but can't be
+// replayed, so the resolved seed is always logged.
+func newRNG() *rand.Rand {
+	seed := time.Now().UnixNano()
+	if raw := os.Getenv("SEED"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			log.Fatalf("invalid SEED %q: %v", raw, err)
+		}
+		seed = parsed
+	}
+	log.Printf("generator RNG seed: %d (set SEED=%d to reproduce this run)", seed, seed)
+	return rand.New(rand.NewSource(seed))
+}
 
 func main() {
 	ctx := context.Background()
@@ -59,7 +78,9 @@ func main() {
 		return
 	}
 
-	events := generator.GenerateNormalEvents(tenants, features, 7, 10) // 7 days, 10 events/day/tenant/feature
+	rng := newRNG()
+
+	events := generator.GenerateNormalEvents(rng, tenants, features, 7, 10) // 7 days, 10 events/day/tenant/feature
 	log.Printf("generated %d synthetic events", len(events))
 
 	if err := generator.InsertEvents(ctx, pgPool, events); err != nil {
@@ -75,15 +96,15 @@ func main() {
 	}
 
 	var allAnomalies []generator.AnomalyEvent
-	allAnomalies = append(allAnomalies, generator.InjectSpikes(tenants, features, 7, 15)...)
-	allAnomalies = append(allAnomalies, generator.InjectReplays(events, 15)...)
+	allAnomalies = append(allAnomalies, generator.InjectSpikes(rng, tenants, features, 7, 15)...)
+	allAnomalies = append(allAnomalies, generator.InjectReplays(rng, events, 15)...)
 
-	negBalance, err := generator.InjectNegativeBalanceAttempts(ctx, pgPool, tenants, features, 10)
+	negBalance, err := generator.InjectNegativeBalanceAttempts(ctx, pgPool, rng, tenants, features, 10)
 	if err != nil {
 		log.Fatalf("negative balance injection failed: %v", err)
 	}
 	allAnomalies = append(allAnomalies, negBalance...)
-	allAnomalies = append(allAnomalies, generator.InjectOutOfOrderEvents(tenants, features, 15)...)
+	allAnomalies = append(allAnomalies, generator.InjectOutOfOrderEvents(rng, tenants, features, 15)...)
 
 	anomalyCount, err := generator.InsertAnomalies(ctx, pgPool, allAnomalies)
 	if err != nil {

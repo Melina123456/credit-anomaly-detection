@@ -1,9 +1,14 @@
 package generator
 
 import (
+	"math/rand"
 	"testing"
 	"time"
 )
+
+func testRNG() *rand.Rand {
+	return rand.New(rand.NewSource(1))
+}
 
 func testTenants() []Tenant {
 	return []Tenant{
@@ -25,7 +30,7 @@ func TestGenerateNormalEvents_Count(t *testing.T) {
 	days := 3
 	eventsPerDay := 4
 
-	events := GenerateNormalEvents(tenants, features, days, eventsPerDay)
+	events := GenerateNormalEvents(testRNG(), tenants, features, days, eventsPerDay)
 
 	want := len(tenants) * len(features) * days * eventsPerDay
 	if len(events) != want {
@@ -40,7 +45,7 @@ func TestGenerateNormalEvents_QuantityNeverBelowFloor(t *testing.T) {
 	tenants := []Tenant{{ID: "t1", Name: "Tiny", PlanTier: "free"}}
 	features := testFeatures()
 
-	events := GenerateNormalEvents(tenants, features, 30, 50)
+	events := GenerateNormalEvents(testRNG(), tenants, features, 30, 50)
 
 	for _, e := range events {
 		if e.Quantity < 1 {
@@ -58,7 +63,7 @@ func TestGenerateNormalEvents_UnknownPlanTierYieldsZeroBaseline(t *testing.T) {
 	tenants := []Tenant{{ID: "t1", Name: "Mystery", PlanTier: "unobtainium"}}
 	features := testFeatures()
 
-	events := GenerateNormalEvents(tenants, features, 1, 5)
+	events := GenerateNormalEvents(testRNG(), tenants, features, 1, 5)
 
 	for _, e := range events {
 		if e.Quantity != 1 {
@@ -68,13 +73,13 @@ func TestGenerateNormalEvents_UnknownPlanTierYieldsZeroBaseline(t *testing.T) {
 }
 
 func TestGenerateNormalEvents_EmptyInputsProduceNoEvents(t *testing.T) {
-	if events := GenerateNormalEvents(nil, testFeatures(), 3, 5); len(events) != 0 {
+	if events := GenerateNormalEvents(testRNG(), nil, testFeatures(), 3, 5); len(events) != 0 {
 		t.Fatalf("expected 0 events for nil tenants, got %d", len(events))
 	}
-	if events := GenerateNormalEvents(testTenants(), nil, 3, 5); len(events) != 0 {
+	if events := GenerateNormalEvents(testRNG(), testTenants(), nil, 3, 5); len(events) != 0 {
 		t.Fatalf("expected 0 events for nil features, got %d", len(events))
 	}
-	if events := GenerateNormalEvents(testTenants(), testFeatures(), 0, 5); len(events) != 0 {
+	if events := GenerateNormalEvents(testRNG(), testTenants(), testFeatures(), 0, 5); len(events) != 0 {
 		t.Fatalf("expected 0 events for 0 days, got %d", len(events))
 	}
 }
@@ -93,7 +98,7 @@ func TestGenerateNormalEvents_OccurredAtWithinWindow(t *testing.T) {
 	upperBound := time.Date(today.Year(), today.Month(), today.Day(), 23, 59, 59, 0, time.UTC)
 	lowerBound := today.AddDate(0, 0, -days-1)
 
-	events := GenerateNormalEvents(tenants, features, days, 3)
+	events := GenerateNormalEvents(testRNG(), tenants, features, days, 3)
 
 	for _, e := range events {
 		if e.OccurredAt.After(upperBound) {
