@@ -22,7 +22,7 @@ var tierBaseline = map[string]float64{
 // GenerateNormalEvents produces `eventsPerTenantPerDay` events per tenant
 // per feature per day, over `days` days ending today, with gaussian noise
 // around each tenant's baseline.
-func GenerateNormalEvents(tenants []Tenant, features []Feature, days int, eventsPerDay int) []EventSpec {
+func GenerateNormalEvents(rng *rand.Rand, tenants []Tenant, features []Feature, days int, eventsPerDay int) []EventSpec {
 	var events []EventSpec
 	now := time.Now().UTC()
 
@@ -33,12 +33,12 @@ func GenerateNormalEvents(tenants []Tenant, features []Feature, days int, events
 				dayStart := now.AddDate(0, 0, -d)
 				for i := 0; i < eventsPerDay; i++ {
 					// spread events randomly through the day
-					offset := time.Duration(rand.Intn(24*60)) * time.Minute
+					offset := time.Duration(rng.Intn(24*60)) * time.Minute
 					occurredAt := time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(), 0, 0, 0, 0, time.UTC).Add(offset)
 
 					// gaussian noise around baseline/eventsPerDay, floor at 1
 					mean := baseline / float64(eventsPerDay)
-					qty := mean + rand.NormFloat64()*(mean*0.2)
+					qty := mean + rng.NormFloat64()*(mean*0.2)
 					if qty < 1 {
 						qty = 1
 					}

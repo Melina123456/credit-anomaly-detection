@@ -9,7 +9,7 @@ func TestInjectSpikes_QuantityIsWithinDocumentedMultiplier(t *testing.T) {
 	tenants := testTenants()
 	features := testFeatures()
 
-	anomalies := InjectSpikes(tenants, features, 7, 20)
+	anomalies := InjectSpikes(testRNG(), tenants, features, 7, 20)
 
 	if len(anomalies) != 20 {
 		t.Fatalf("got %d spikes, want 20", len(anomalies))
@@ -28,7 +28,7 @@ func TestInjectSpikes_QuantityIsWithinDocumentedMultiplier(t *testing.T) {
 }
 
 func TestInjectSpikes_ZeroCountProducesNoAnomalies(t *testing.T) {
-	anomalies := InjectSpikes(testTenants(), testFeatures(), 7, 0)
+	anomalies := InjectSpikes(testRNG(), testTenants(), testFeatures(), 7, 0)
 	if len(anomalies) != 0 {
 		t.Fatalf("expected 0 anomalies, got %d", len(anomalies))
 	}
@@ -40,7 +40,7 @@ func TestInjectReplays_DuplicatesAnExistingEventExactly(t *testing.T) {
 		{TenantID: "t2", FeatureID: "f2", Quantity: 7, OccurredAt: time.Now().UTC().AddDate(0, 0, -1)},
 	}
 
-	anomalies := InjectReplays(existing, 5)
+	anomalies := InjectReplays(testRNG(), existing, 5)
 
 	if len(anomalies) != 5 {
 		t.Fatalf("got %d replays, want 5", len(anomalies))
@@ -67,7 +67,7 @@ func TestInjectReplays_DuplicatesAnExistingEventExactly(t *testing.T) {
 func TestInjectReplays_EmptyExistingProducesNoAnomalies(t *testing.T) {
 	// this is the important edge case: if InjectReplays ever loses this
 	// guard, rand.Intn(0) panics instead of returning an empty slice.
-	anomalies := InjectReplays(nil, 5)
+	anomalies := InjectReplays(testRNG(), nil, 5)
 	if len(anomalies) != 0 {
 		t.Fatalf("expected 0 anomalies for empty existing events, got %d", len(anomalies))
 	}
@@ -78,7 +78,7 @@ func TestInjectOutOfOrderEvents_BackdatedWithinDocumentedRange(t *testing.T) {
 	features := testFeatures()
 	now := time.Now().UTC()
 
-	anomalies := InjectOutOfOrderEvents(tenants, features, 15)
+	anomalies := InjectOutOfOrderEvents(testRNG(), tenants, features, 15)
 
 	if len(anomalies) != 15 {
 		t.Fatalf("got %d out-of-order anomalies, want 15", len(anomalies))
