@@ -39,3 +39,7 @@ ai-service/models/
 /CV-edits.md
 /INTERVIEW-PREP.md
 /INTERVIEW-PREP.pdf
+/ROADMAP.md
+
+# Output of scripts/seed_sweep.sh, regenerated on every run
+/scripts/seed_sweep_results.csv
