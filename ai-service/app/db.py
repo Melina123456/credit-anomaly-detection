@@ -21,8 +21,22 @@ def get_engine():
     return _engine
 
 
+# Postgres returns rows in no guaranteed order without ORDER BY, and after
+# deletes/re-inserts the physical order does change. IsolationForest draws its
+# subsamples by row position, so the same data in a different order trains a
+# different model even with a fixed random_state. Ordered by content rather
+# than id, because ids are random UUIDs that differ on every database. Rows
+# that tie on every key here are identical events, so their order can't
+# change the model.
+_EVENT_ORDER = """
+    JOIN tenant t ON t.id = ue.tenant_id
+    JOIN feature f ON f.id = ue.feature_id
+    ORDER BY t.name, f.key, ue.occurred_at, ue.quantity, ue.ingested_at
+"""
+
+
 def fetch_usage_events() -> pd.DataFrame:
-    query = "SELECT * FROM usage_event"
+    query = "SELECT ue.* FROM usage_event ue" + _EVENT_ORDER
     return pd.read_sql(query, get_engine())
 
 def fetch_usage_events_with_labels() -> pd.DataFrame:
@@ -30,7 +44,7 @@ def fetch_usage_events_with_labels() -> pd.DataFrame:
         SELECT ue.*, al.anomaly_type
         FROM usage_event ue
         LEFT JOIN anomaly_label al ON al.usage_event_id = ue.id
-    """
+    """ + _EVENT_ORDER
     df = pd.read_sql(query, get_engine())
     df["is_anomaly"] = df["anomaly_type"].notna()
     return df

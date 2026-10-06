@@ -7,11 +7,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// UpdateEntitlementUsage recomputes usage per grant, within the
-// current period window (daily = since start of today UTC).
-func UpdateEntitlementUsage(ctx context.Context, pool *pgxpool.Pool) (int, error) {
-	windowStart := time.Now().UTC().Truncate(24 * time.Hour)
-
+// UpdateEntitlementUsage recomputes usage per grant for events at or after
+// windowStart (the start of the current daily period). The caller supplies
+// it so the window follows the same clock the events were generated on.
+func UpdateEntitlementUsage(ctx context.Context, pool *pgxpool.Pool, windowStart time.Time) (int, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT eg.id, SUM(ue.quantity) AS used
 		FROM entitlement_grant eg

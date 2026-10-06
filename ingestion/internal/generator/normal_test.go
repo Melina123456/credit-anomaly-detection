@@ -10,6 +10,8 @@ func testRNG() *rand.Rand {
 	return rand.New(rand.NewSource(1))
 }
 
+var testRef = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
 func testTenants() []Tenant {
 	return []Tenant{
 		{ID: "t1", Name: "Acme", PlanTier: "enterprise"},
@@ -30,7 +32,7 @@ func TestGenerateNormalEvents_Count(t *testing.T) {
 	days := 3
 	eventsPerDay := 4
 
-	events := GenerateNormalEvents(testRNG(), tenants, features, days, eventsPerDay)
+	events := GenerateNormalEvents(testRNG(), testRef, tenants, features, days, eventsPerDay)
 
 	want := len(tenants) * len(features) * days * eventsPerDay
 	if len(events) != want {
@@ -45,7 +47,7 @@ func TestGenerateNormalEvents_QuantityNeverBelowFloor(t *testing.T) {
 	tenants := []Tenant{{ID: "t1", Name: "Tiny", PlanTier: "free"}}
 	features := testFeatures()
 
-	events := GenerateNormalEvents(testRNG(), tenants, features, 30, 50)
+	events := GenerateNormalEvents(testRNG(), testRef, tenants, features, 30, 50)
 
 	for _, e := range events {
 		if e.Quantity < 1 {
@@ -63,7 +65,7 @@ func TestGenerateNormalEvents_UnknownPlanTierYieldsZeroBaseline(t *testing.T) {
 	tenants := []Tenant{{ID: "t1", Name: "Mystery", PlanTier: "unobtainium"}}
 	features := testFeatures()
 
-	events := GenerateNormalEvents(testRNG(), tenants, features, 1, 5)
+	events := GenerateNormalEvents(testRNG(), testRef, tenants, features, 1, 5)
 
 	for _, e := range events {
 		if e.Quantity != 1 {
@@ -73,13 +75,13 @@ func TestGenerateNormalEvents_UnknownPlanTierYieldsZeroBaseline(t *testing.T) {
 }
 
 func TestGenerateNormalEvents_EmptyInputsProduceNoEvents(t *testing.T) {
-	if events := GenerateNormalEvents(testRNG(), nil, testFeatures(), 3, 5); len(events) != 0 {
+	if events := GenerateNormalEvents(testRNG(), testRef, nil, testFeatures(), 3, 5); len(events) != 0 {
 		t.Fatalf("expected 0 events for nil tenants, got %d", len(events))
 	}
-	if events := GenerateNormalEvents(testRNG(), testTenants(), nil, 3, 5); len(events) != 0 {
+	if events := GenerateNormalEvents(testRNG(), testRef, testTenants(), nil, 3, 5); len(events) != 0 {
 		t.Fatalf("expected 0 events for nil features, got %d", len(events))
 	}
-	if events := GenerateNormalEvents(testRNG(), testTenants(), testFeatures(), 0, 5); len(events) != 0 {
+	if events := GenerateNormalEvents(testRNG(), testRef, testTenants(), testFeatures(), 0, 5); len(events) != 0 {
 		t.Fatalf("expected 0 events for 0 days, got %d", len(events))
 	}
 }
@@ -89,23 +91,33 @@ func TestGenerateNormalEvents_OccurredAtWithinWindow(t *testing.T) {
 	features := testFeatures()
 	days := 5
 
-	// NOTE: for "today" (d=0), the function picks a random minute-of-day
-	// offset independent of the actual wall-clock time, so an event dated
-	// "today" can land later today than the instant this test runs — it is
-	// not guaranteed to be <= now. That's fine for a batch-generated
-	// synthetic dataset, so the upper bound here is end-of-today, not "now".
-	today := time.Now().UTC()
-	upperBound := time.Date(today.Year(), today.Month(), today.Day(), 23, 59, 59, 0, time.UTC)
-	lowerBound := today.AddDate(0, 0, -days-1)
+	// every event must fall strictly before ref — an event dated after its
+	// own ingestion time would get a negative ingestion lag
+	lowerBound := testRef.AddDate(0, 0, -days)
 
-	events := GenerateNormalEvents(testRNG(), tenants, features, days, 3)
+	events := GenerateNormalEvents(testRNG(), testRef, tenants, features, days, 3)
 
 	for _, e := range events {
-		if e.OccurredAt.After(upperBound) {
-			t.Fatalf("event occurred after the allowed window: %v (upper bound %v)", e.OccurredAt, upperBound)
+		if !e.OccurredAt.Before(testRef) {
+			t.Fatalf("event at %v is not before the reference time %v", e.OccurredAt, testRef)
 		}
 		if e.OccurredAt.Before(lowerBound) {
 			t.Fatalf("event occurred before the allowed window: %v (lower bound %v)", e.OccurredAt, lowerBound)
+		}
+	}
+}
+
+func TestGenerateNormalEvents_SameSeedAndRefGiveIdenticalEvents(t *testing.T) {
+	// the reproducibility guarantee: nothing read from the wall clock
+	a := GenerateNormalEvents(testRNG(), testRef, testTenants(), testFeatures(), 7, 10)
+	b := GenerateNormalEvents(testRNG(), testRef, testTenants(), testFeatures(), 7, 10)
+
+	if len(a) != len(b) {
+		t.Fatalf("lengths differ: %d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("event %d differs between identical runs: %+v vs %+v", i, a[i], b[i])
 		}
 	}
 }
