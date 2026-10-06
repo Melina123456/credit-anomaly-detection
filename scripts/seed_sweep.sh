@@ -18,6 +18,9 @@ API_KEY="local-dev-only-key" # matches docker-compose.yml's ADMIN_API_KEY
 BASE_URL="http://localhost:8000"
 OUT_CSV="scripts/seed_sweep_results.csv"
 
+# `run` below reuses whatever ingestion image exists, so rebuild it
+# explicitly — a stale image silently ignores SEED.
+docker compose build ingestion
 docker compose up -d --build postgres redis ai-service
 
 echo "waiting for ai-service..."
@@ -39,7 +42,11 @@ for seed in $(seq 1 "$N"); do
         DELETE FROM credit_transaction WHERE type != 'initial_grant';
     "
 
-    docker compose run --rm -e SEED="$seed" ingestion
+    out=$(docker compose run --rm -e SEED="$seed" ingestion 2>&1)
+    if ! grep -q "generator RNG seed: $seed " <<<"$out"; then
+        echo "ingestion did not confirm SEED=$seed — refusing to measure an unseeded dataset" >&2
+        exit 1
+    fi
 
     curl -sf -H "X-API-Key: $API_KEY" "$BASE_URL/debug/evaluate" | python3 -c "
 import json, sys

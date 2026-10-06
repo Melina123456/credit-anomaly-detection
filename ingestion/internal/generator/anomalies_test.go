@@ -9,7 +9,7 @@ func TestInjectSpikes_QuantityIsWithinDocumentedMultiplier(t *testing.T) {
 	tenants := testTenants()
 	features := testFeatures()
 
-	anomalies := InjectSpikes(testRNG(), tenants, features, 7, 20)
+	anomalies := InjectSpikes(testRNG(), testRef, tenants, features, 7, 20)
 
 	if len(anomalies) != 20 {
 		t.Fatalf("got %d spikes, want 20", len(anomalies))
@@ -28,7 +28,7 @@ func TestInjectSpikes_QuantityIsWithinDocumentedMultiplier(t *testing.T) {
 }
 
 func TestInjectSpikes_ZeroCountProducesNoAnomalies(t *testing.T) {
-	anomalies := InjectSpikes(testRNG(), testTenants(), testFeatures(), 7, 0)
+	anomalies := InjectSpikes(testRNG(), testRef, testTenants(), testFeatures(), 7, 0)
 	if len(anomalies) != 0 {
 		t.Fatalf("expected 0 anomalies, got %d", len(anomalies))
 	}
@@ -76,9 +76,8 @@ func TestInjectReplays_EmptyExistingProducesNoAnomalies(t *testing.T) {
 func TestInjectOutOfOrderEvents_BackdatedWithinDocumentedRange(t *testing.T) {
 	tenants := testTenants()
 	features := testFeatures()
-	now := time.Now().UTC()
 
-	anomalies := InjectOutOfOrderEvents(testRNG(), tenants, features, 15)
+	anomalies := InjectOutOfOrderEvents(testRNG(), testRef, tenants, features, 15)
 
 	if len(anomalies) != 15 {
 		t.Fatalf("got %d out-of-order anomalies, want 15", len(anomalies))
@@ -88,11 +87,11 @@ func TestInjectOutOfOrderEvents_BackdatedWithinDocumentedRange(t *testing.T) {
 		if a.AnomalyType != "out_of_order" {
 			t.Fatalf("unexpected anomaly type %q", a.AnomalyType)
 		}
-		daysBack := now.Sub(a.OccurredAt).Hours() / 24
-		// documented range is 20-40 days back; allow a small tolerance for
-		// the seconds that elapse between "now" here and inside the function.
-		if daysBack < 19.9 || daysBack > 40.1 {
-			t.Fatalf("out-of-order event backdated %.2f days, expected 20-40", daysBack)
+		// measured from the same fixed reference the function used, so the
+		// range is exact: 20 + rng.Intn(20) gives whole days 20..39
+		daysBack := testRef.Sub(a.OccurredAt).Hours() / 24
+		if daysBack < 20 || daysBack > 39 {
+			t.Fatalf("out-of-order event backdated %.2f days, expected 20-39", daysBack)
 		}
 
 		baseline := tierBaseline[tenantTierByID(tenants, a.TenantID)]

@@ -61,9 +61,15 @@ def knee_cut(scores) -> int:
 
 def flags_from_cut(scores, k: int) -> np.ndarray:
     """Turn "flag the k most anomalous" into sklearn's -1/1 labels, so the
-    existing evaluation code can grade it unchanged."""
+    existing evaluation code can grade it unchanged.
+
+    Flags exactly k by rank. Cutting at a score value instead would flag every
+    event tied with the k-th — and Isolation Forest scores do tie (dozens per
+    dataset here), which silently flagged more than k on a third of runs.
+    Ties at the boundary are broken by position, deterministically.
+    """
     scores = np.asarray(scores, dtype=float)
-    if k <= 0:
-        return np.ones(len(scores), dtype=int)
-    cutoff = np.sort(scores)[k - 1]
-    return np.where(scores <= cutoff, -1, 1)
+    flags = np.ones(len(scores), dtype=int)
+    if k > 0:
+        flags[np.argsort(scores, kind="stable")[:k]] = -1
+    return flags

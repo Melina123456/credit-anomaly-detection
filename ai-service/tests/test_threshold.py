@@ -72,16 +72,14 @@ def test_flags_from_cut_zero_or_negative_k_flags_nothing():
     assert list(flags_from_cut(scores, k=-3)) == [1, 1, 1, 1, 1]
 
 
-def test_flags_from_cut_ties_at_the_cutoff_can_flag_more_than_k():
-    # known sharp edge: the cutoff is a score value, not a rank, so every
-    # event sharing that value gets flagged. Asked for k=2 here, but three
-    # scores tie for 2nd-lowest, so all three (plus the lowest) are flagged.
-    # Real model scores are continuous floats and essentially never tie in
-    # practice, but the function doesn't defend against it, so this is
-    # pinned down rather than left as a surprise.
+def test_flags_from_cut_flags_exactly_k_even_when_scores_tie_at_the_cutoff():
+    # three scores tie for 2nd-lowest. Cutting by score value would flag all
+    # of them (4 total); Isolation Forest scores really do tie, so this once
+    # inflated results on a third of runs. Exactly k must be flagged, with the
+    # tie broken by position.
     scores = [1, 2, 2, 2, 5]
 
     flags = flags_from_cut(scores, k=2)
 
-    assert list(flags) == [-1, -1, -1, -1, 1]
-    assert (flags == -1).sum() == 4
+    assert (flags == -1).sum() == 2
+    assert list(flags) == [-1, -1, 1, 1, 1]

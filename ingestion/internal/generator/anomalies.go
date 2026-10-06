@@ -17,10 +17,9 @@ type AnomalyEvent struct {
 }
 
 // InjectSpikes creates a few events with abnormally high quantity
-// for random tenant/feature pairs, within the last `days` days.
-func InjectSpikes(rng *rand.Rand, tenants []Tenant, features []Feature, days int, count int) []AnomalyEvent {
+// for random tenant/feature pairs, within the `days` days ending at ref.
+func InjectSpikes(rng *rand.Rand, ref time.Time, tenants []Tenant, features []Feature, days int, count int) []AnomalyEvent {
 	var anomalies []AnomalyEvent
-	now := time.Now().UTC()
 
 	for i := 0; i < count; i++ {
 		t := tenants[rng.Intn(len(tenants))]
@@ -33,8 +32,7 @@ func InjectSpikes(rng *rand.Rand, tenants []Tenant, features []Feature, days int
 
 		d := rng.Intn(days)
 		offset := time.Duration(rng.Intn(24*60)) * time.Minute
-		dayStart := now.AddDate(0, 0, -d)
-		occurredAt := time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(), 0, 0, 0, 0, time.UTC).Add(offset)
+		occurredAt := ref.AddDate(0, 0, -(d + 1)).Add(offset)
 
 		anomalies = append(anomalies, AnomalyEvent{
 			TenantID:    t.ID,
@@ -70,9 +68,8 @@ func InjectReplays(rng *rand.Rand, existing []EventSpec, count int) []AnomalyEve
 
 // InjectNegativeBalanceAttempts creates single large events that exceed
 // a tenant's current balance, simulating an overspend attempt.
-func InjectNegativeBalanceAttempts(ctx context.Context, pool *pgxpool.Pool, rng *rand.Rand, tenants []Tenant, features []Feature, count int) ([]AnomalyEvent, error) {
+func InjectNegativeBalanceAttempts(ctx context.Context, pool *pgxpool.Pool, rng *rand.Rand, ref time.Time, tenants []Tenant, features []Feature, count int) ([]AnomalyEvent, error) {
 	var anomalies []AnomalyEvent
-	now := time.Now().UTC()
 
 	for i := 0; i < count; i++ {
 		t := tenants[rng.Intn(len(tenants))]
@@ -100,7 +97,7 @@ func InjectNegativeBalanceAttempts(ctx context.Context, pool *pgxpool.Pool, rng 
 			TenantID:    t.ID,
 			FeatureID:   f.ID,
 			Quantity:    quantity,
-			OccurredAt:  now,
+			OccurredAt:  ref,
 			AnomalyType: "negative_balance_attempt",
 		})
 	}
@@ -109,9 +106,8 @@ func InjectNegativeBalanceAttempts(ctx context.Context, pool *pgxpool.Pool, rng 
 
 // InjectOutOfOrderEvents creates events with occurred_at far in the past,
 // simulating backdated/late-arriving data.
-func InjectOutOfOrderEvents(rng *rand.Rand, tenants []Tenant, features []Feature, count int) []AnomalyEvent {
+func InjectOutOfOrderEvents(rng *rand.Rand, ref time.Time, tenants []Tenant, features []Feature, count int) []AnomalyEvent {
 	var anomalies []AnomalyEvent
-	now := time.Now().UTC()
 
 	for i := 0; i < count; i++ {
 		t := tenants[rng.Intn(len(tenants))]
@@ -120,7 +116,7 @@ func InjectOutOfOrderEvents(rng *rand.Rand, tenants []Tenant, features []Feature
 
 		// normal-looking quantity, but backdated 20-40 days
 		daysBack := 20 + rng.Intn(20)
-		occurredAt := now.AddDate(0, 0, -daysBack)
+		occurredAt := ref.AddDate(0, 0, -daysBack)
 		quantity := baseline / 10 // roughly one normal event's worth
 
 		anomalies = append(anomalies, AnomalyEvent{
@@ -135,16 +131,17 @@ func InjectOutOfOrderEvents(rng *rand.Rand, tenants []Tenant, features []Feature
 }
 
 // InsertAnomalies writes each anomaly into usage_event, then labels it
-// in anomaly_label with its type.
-func InsertAnomalies(ctx context.Context, pool *pgxpool.Pool, anomalies []AnomalyEvent) (int, error) {
+// in anomaly_label with its type. ingested_at is set explicitly rather than
+// left to the database clock, for the same reason as InsertEvents.
+func InsertAnomalies(ctx context.Context, pool *pgxpool.Pool, anomalies []AnomalyEvent, ingestedAt time.Time) (int, error) {
 	count := 0
 	for _, a := range anomalies {
 		var eventID string
 		err := pool.QueryRow(ctx, `
-			INSERT INTO usage_event (tenant_id, feature_id, quantity, occurred_at, source)
-			VALUES ($1, $2, $3, $4, 'synthetic_anomaly')
+			INSERT INTO usage_event (tenant_id, feature_id, quantity, occurred_at, ingested_at, source)
+			VALUES ($1, $2, $3, $4, $5, 'synthetic_anomaly')
 			RETURNING id
-		`, a.TenantID, a.FeatureID, a.Quantity, a.OccurredAt).Scan(&eventID)
+		`, a.TenantID, a.FeatureID, a.Quantity, a.OccurredAt, ingestedAt).Scan(&eventID)
 		if err != nil {
 			return count, err
 		}

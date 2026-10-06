@@ -17,6 +17,9 @@ cd "$(dirname "$0")/.."
 N="${1:-20}"
 OUT_CSV="scripts/threshold_sweep_results.csv"
 
+# `run` below reuses whatever ingestion image exists, so rebuild it
+# explicitly — a stale image silently ignores SEED.
+docker compose build ingestion
 docker compose up -d --build postgres redis ai-service
 
 echo "waiting for ai-service..."
@@ -38,7 +41,11 @@ for seed in $(seq 1 "$N"); do
         DELETE FROM credit_transaction WHERE type != 'initial_grant';
     "
 
-    docker compose run --rm -e SEED="$seed" ingestion >/dev/null
+    out=$(docker compose run --rm -e SEED="$seed" ingestion 2>&1)
+    if ! grep -q "generator RNG seed: $seed " <<<"$out"; then
+        echo "ingestion did not confirm SEED=$seed — refusing to measure an unseeded dataset" >&2
+        exit 1
+    fi
 
     docker compose exec -T ai-service python -c "
 import sys

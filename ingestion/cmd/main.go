@@ -32,6 +32,26 @@ func newRNG() *rand.Rand {
 	return rand.New(rand.NewSource(seed))
 }
 
+// defaultReferenceTime is fixed rather than time.Now(): every generated
+// timestamp, and ingestion_lag_days with it, is measured from this instant,
+// so a seed only reproduces a dataset if the clock is fixed too.
+const defaultReferenceTime = "2026-01-01T00:00:00Z"
+
+// referenceTime is "now" inside the synthetic world. Normal events fall in
+// the days before it and are ingested at it; REFERENCE_TIME overrides it.
+func referenceTime() time.Time {
+	raw := os.Getenv("REFERENCE_TIME")
+	if raw == "" {
+		raw = defaultReferenceTime
+	}
+	ref, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		log.Fatalf("invalid REFERENCE_TIME %q (want RFC3339): %v", raw, err)
+	}
+	log.Printf("generator reference time: %s", ref.UTC().Format(time.RFC3339))
+	return ref.UTC()
+}
+
 func main() {
 	ctx := context.Background()
 	_ = godotenv.Load("./.env")
@@ -79,11 +99,12 @@ func main() {
 	}
 
 	rng := newRNG()
+	ref := referenceTime()
 
-	events := generator.GenerateNormalEvents(rng, tenants, features, 7, 10) // 7 days, 10 events/day/tenant/feature
+	events := generator.GenerateNormalEvents(rng, ref, tenants, features, 7, 10) // 7 days, 10 events/day/tenant/feature
 	log.Printf("generated %d synthetic events", len(events))
 
-	if err := generator.InsertEvents(ctx, pgPool, events); err != nil {
+	if err := generator.InsertEvents(ctx, pgPool, events, ref); err != nil {
 		log.Fatalf("insert failed: %v", err)
 	}
 	log.Println("all events inserted successfully")
@@ -91,22 +112,24 @@ func main() {
 	// Must run before anomalies are injected: InjectNegativeBalanceAttempts
 	// reads credit_pool_balance to pick a quantity that exceeds what the
 	// tenant actually has left.
-	if err := reconcileLedgerAndCaches(ctx, pgPool); err != nil {
+	if err := reconcileLedgerAndCaches(ctx, pgPool, ref); err != nil {
 		log.Fatalf("ledger/cache reconciliation failed: %v", err)
 	}
 
 	var allAnomalies []generator.AnomalyEvent
-	allAnomalies = append(allAnomalies, generator.InjectSpikes(rng, tenants, features, 7, 15)...)
+	allAnomalies = append(allAnomalies, generator.InjectSpikes(rng, ref, tenants, features, 7, 15)...)
 	allAnomalies = append(allAnomalies, generator.InjectReplays(rng, events, 15)...)
 
-	negBalance, err := generator.InjectNegativeBalanceAttempts(ctx, pgPool, rng, tenants, features, 10)
+	negBalance, err := generator.InjectNegativeBalanceAttempts(ctx, pgPool, rng, ref, tenants, features, 10)
 	if err != nil {
 		log.Fatalf("negative balance injection failed: %v", err)
 	}
 	allAnomalies = append(allAnomalies, negBalance...)
-	allAnomalies = append(allAnomalies, generator.InjectOutOfOrderEvents(rng, tenants, features, 15)...)
+	allAnomalies = append(allAnomalies, generator.InjectOutOfOrderEvents(rng, ref, tenants, features, 15)...)
 
-	anomalyCount, err := generator.InsertAnomalies(ctx, pgPool, allAnomalies)
+	// A minute after the normal batch: a replay arrives after its original,
+	// so its lag differs slightly instead of making the pair identical rows.
+	anomalyCount, err := generator.InsertAnomalies(ctx, pgPool, allAnomalies, ref.Add(time.Minute))
 	if err != nil {
 		log.Fatalf("anomaly insertion failed: %v", err)
 	}
@@ -114,7 +137,7 @@ func main() {
 
 	// Anomaly rows are usage events too, so they need debits and cache entries
 	// of their own — otherwise a single seeding run leaves them unledgered.
-	if err := reconcileLedgerAndCaches(ctx, pgPool); err != nil {
+	if err := reconcileLedgerAndCaches(ctx, pgPool, ref); err != nil {
 		log.Fatalf("ledger/cache reconciliation failed: %v", err)
 	}
 }
@@ -122,7 +145,8 @@ func main() {
 // reconcileLedgerAndCaches writes a debit for every usage event that doesn't
 // have one yet, then rebuilds the read caches from the ledger. Safe to call
 // repeatedly — WriteDebitsFromEvents skips events already in the ledger.
-func reconcileLedgerAndCaches(ctx context.Context, pgPool *pgxpool.Pool) error {
+// The entitlement window is the last day before ref, on the generator's clock.
+func reconcileLedgerAndCaches(ctx context.Context, pgPool *pgxpool.Pool, ref time.Time) error {
 	debitCount, err := ledger.WriteDebitsFromEvents(ctx, pgPool)
 	if err != nil {
 		return err
@@ -135,7 +159,7 @@ func reconcileLedgerAndCaches(ctx context.Context, pgPool *pgxpool.Pool) error {
 	}
 	log.Printf("updated %d pool balances", balanceCount)
 
-	usageCount, err := cache.UpdateEntitlementUsage(ctx, pgPool)
+	usageCount, err := cache.UpdateEntitlementUsage(ctx, pgPool, ref.AddDate(0, 0, -1))
 	if err != nil {
 		return err
 	}
