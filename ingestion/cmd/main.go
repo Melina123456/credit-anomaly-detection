@@ -52,6 +52,18 @@ func referenceTime() time.Time {
 	return ref.UTC()
 }
 
+// anomalyCounts is how many of each anomaly type to plant; ANOMALY_COUNTS
+// overrides the default split. Logged so a sweep can confirm the generator
+// received the setting it was sent.
+func anomalyCounts() generator.AnomalyCounts {
+	counts, err := generator.ParseAnomalyCounts(os.Getenv("ANOMALY_COUNTS"))
+	if err != nil {
+		log.Fatalf("invalid ANOMALY_COUNTS: %v", err)
+	}
+	log.Printf("generator anomaly counts: %s (total %d)", counts, counts.Total())
+	return counts
+}
+
 func main() {
 	ctx := context.Background()
 	_ = godotenv.Load("./.env")
@@ -100,6 +112,7 @@ func main() {
 
 	rng := newRNG()
 	ref := referenceTime()
+	counts := anomalyCounts()
 
 	events := generator.GenerateNormalEvents(rng, ref, tenants, features, 7, 10) // 7 days, 10 events/day/tenant/feature
 	log.Printf("generated %d synthetic events", len(events))
@@ -117,15 +130,15 @@ func main() {
 	}
 
 	var allAnomalies []generator.AnomalyEvent
-	allAnomalies = append(allAnomalies, generator.InjectSpikes(rng, ref, tenants, features, 7, 15)...)
-	allAnomalies = append(allAnomalies, generator.InjectReplays(rng, events, 15)...)
+	allAnomalies = append(allAnomalies, generator.InjectSpikes(rng, ref, tenants, features, 7, counts.Spike)...)
+	allAnomalies = append(allAnomalies, generator.InjectReplays(rng, events, counts.Replay)...)
 
-	negBalance, err := generator.InjectNegativeBalanceAttempts(ctx, pgPool, rng, ref, tenants, features, 10)
+	negBalance, err := generator.InjectNegativeBalanceAttempts(ctx, pgPool, rng, ref, tenants, features, counts.NegativeBalance)
 	if err != nil {
 		log.Fatalf("negative balance injection failed: %v", err)
 	}
 	allAnomalies = append(allAnomalies, negBalance...)
-	allAnomalies = append(allAnomalies, generator.InjectOutOfOrderEvents(rng, ref, tenants, features, 15)...)
+	allAnomalies = append(allAnomalies, generator.InjectOutOfOrderEvents(rng, ref, tenants, features, counts.OutOfOrder)...)
 
 	// A minute after the normal batch: a replay arrives after its original,
 	// so its lag differs slightly instead of making the pair identical rows.
