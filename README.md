@@ -187,7 +187,9 @@ F1 by assumed anomaly rate (`scripts/contamination_sweep.sh`):
 
 - **At or below the true rate, LOF ranks better** — at 3% its precision is
   0.955 against Isolation Forest's 0.832. Most injected anomalies are unusual
-  *for that tenant*, which is what a local-density method measures.
+  *for that tenant*, which is what a local-density method measures. That
+  advantage turns out to depend on how the anomalies are grouped — see
+  [When anomalies clump](#when-anomalies-clump).
 - **From 7% up the two models are identical, with zero variance.** Told to flag
   more events than there are anomalies, both flag all 55 plus the same number
   of normal events, and precision is just 55/flags. The setting has taken
@@ -246,13 +248,57 @@ inferred from the averages:
 The common thread: **anomalies of the same kind clump together**, and every
 method that reads the shape of the scores has to guess which cliff or cluster
 is the real boundary. Here each anomaly type is injected 10–15 times with
-similar values, which makes clumping likely — measuring where each method
-breaks as clump size varies is the next experiment.
+similar values, which makes clumping likely — the next section measures
+where each method breaks as the group size varies.
 
 **These results reverse an earlier version of this README.** Before the
 reproducibility fixes below, the gap rule appeared to score 0.881 ± 0.002 and
 beat every alternative. Those runs weren't reproducible and happened to
 contain no collapsing datasets; on reproducible data the conclusion flips.
+
+### When anomalies clump
+
+The generator takes the number of each anomaly type
+(`ANOMALY_COUNTS="spike=40,replay=5,negative_balance=5,out_of_order=5"`). The
+sweep (`scripts/clump_sweep.sh`) keeps the total at 55, so the anomaly rate
+never changes, and varies only how many of them are spikes: from 1 (the
+other 54 shared evenly between the other types) to 52. That gives 9 splits
+× 20 seeds = 180 datasets.
+
+**Prediction, written down before the full run:** LOF judges each point
+against its *k* nearest neighbours (pyod's default is 20). Once more than *k*
+spikes are near-identical, each spike's neighbours are other spikes, so the
+group should look like an ordinary dense region — and the breaking point
+should move with *k*.
+
+Share of the spikes each detector ranks among its top 55 (told the true
+count, so this measures the ranking itself):
+
+| Spikes (of 55) | 1 | 5 | 10 | 15 | 20 | 25 | 30 | 40 | 52 |
+|---|---|---|---|---|---|---|---|---|---|
+| LOF, *k* = 10 | 100% | 100% | 100% | **8%** | 12% | 10% | 12% | 16% | 15% |
+| LOF, *k* = 20 | 100% | 100% | 100% | 100% | 100% | **4%** | 4% | 10% | 13% |
+| LOF, *k* = 40 | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% | **6%** |
+| GLOSH | 100% | 100% | 100% | 66% | 13% | 1% | 0% | 2% | 4% |
+
+- **The prediction held for all three values of *k*.** Each one catches every
+  spike until the group outgrows its neighbourhood, then almost none. A larger
+  *k* moves the cliff; it doesn't remove it, and on real data the group sizes
+  aren't known in advance — the same problem as the contamination setting.
+- **GLOSH fails the same way through `min_pts`**, which it chooses from the
+  data at about 12. At 15 spikes it caught them on all 9 datasets where it
+  chose `min_pts` ≥ 14 and missed them on all 4 where it chose ≤ 11.
+- **This qualifies the LOF result above.** The default dataset's largest group
+  is 15, just below *k* = 20. At 25 spikes the order flips: F1 0.83 for
+  Isolation Forest against 0.56 for LOF.
+- **Isolation Forest has no cliff, but groups hurt it differently.** A single
+  spike was missed on every seed: the 18 negative-balance events (robust
+  z-scores 5,500–10,600) stretch the range Isolation Forest cuts across, so a
+  spike at about 900 ranks around 73rd. Its F1 does rise with more spikes
+  (0.80 → 0.97), but the mix of types changes at the same time, so that rise
+  isn't attributed to clumping.
+- **No cutoff rule recovers a broken ranking**: the gap rule and POLAR flag
+  the spikes no more often than the oracle does.
 
 ## Explainability
 
@@ -286,7 +332,9 @@ silently ignored `SEED`, timestamps read from the wall clock (which made
 `ingestion_lag_days` depend on the time of day), no `ORDER BY` on the training
 query (Isolation Forest subsamples by row position), and tied scores that made
 "flag k" flag more than k. The sweep scripts now rebuild the generator and
-refuse to run unless it confirms the seed it was given.
+refuse to run unless it confirms the seed it was given. `ANOMALY_COUNTS` changes how many of each anomaly
+type are planted; left unset, it reproduces the default 15/15/10/15 split
+exactly.
 
 **Seeding is one-shot.** The ingestion service runs on every `docker-compose
 up`, so it skips generation if `usage_event` already has rows. To regenerate,
@@ -304,7 +352,8 @@ API-key protection on internal endpoints.
 
 Experimental phase: reproducible 20-seed evaluation, contamination sweep,
 Isolation Forest vs LOF, and three ways of choosing the cutoff from the scores
-(including the GLOSH/POLAR method from Ghosh et al., 2024).
+(including the GLOSH/POLAR method from Ghosh et al., 2024), and how each
+detector breaks as same-type anomalies group together.
 
 ## Known limitations
 
@@ -318,8 +367,10 @@ Being upfront about what this is *not* yet, since that matters more than the par
   labeled; on real data there's no principled way to pick it, which is an open
   research problem rather than a TODO.
 - **The anomalies are synthetic and clumped.** Each type is injected 10–15
-  times with similar values. That's what breaks the gap rule and GLOSH here;
-  real anomalies might be more scattered, or clump differently.
+  times by default, with similar values. The clump sweep shows how much that
+  matters, but only the spike count was varied systematically; the other
+  types changed together. Real anomalies might be more scattered, or group
+  differently.
 - **Nothing triggers `/train` automatically.** There's no scheduled retraining and no auto-train-on-first-boot — you have to call `POST /train` yourself after data exists. That's intentional for now (an accidental training run on empty or partial data is worse than an explicit `503`), but a real deployment would want a scheduled job or a "retrain if data has grown by X%" trigger.
 - **No model versioning beyond "latest."** Every `/train` call adds a new row to `model_run` and a new file on disk (nothing is overwritten), and `/analyze` now reports which run's model (`model_id`) produced each result — but `/analyze` still only ever *scores against* the single most recent one, and there's no way to pin, compare, or roll back to an older model. The history is there in the table; nothing but the last row is ever served.
 - **The baseline cache has no invalidation beyond the next `/train`.** If a brand-new tenant or feature gets seeded after the last training run, `/analyze` will correctly refuse with a 503 for it (no cached baseline) rather than guess — but that means it's stale-by-construction between training runs, same as the model itself. This is the same "nothing triggers `/train` automatically" limitation above, just visible in a second place now.
