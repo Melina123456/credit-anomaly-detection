@@ -47,3 +47,4 @@ ai-service/models/
 /scripts/contamination_sweep_results.csv
 /scripts/threshold_sweep_results.csv
 /scripts/glosh_sweep_results.csv
+/scripts/clump_sweep_results.csv

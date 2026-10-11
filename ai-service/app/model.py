@@ -38,10 +38,14 @@ def predict_with_model(model, df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def train_lof(df: pd.DataFrame, contamination: float = 0.05) -> pd.DataFrame:
+def train_lof(df: pd.DataFrame, contamination: float = 0.05, n_neighbors: int = 20) -> pd.DataFrame:
+    """n_neighbors is how many nearby points each point is compared against.
+    A group of near-identical anomalies at least that large looks like an
+    ordinary dense region to LOF, so it is a parameter rather than fixed.
+    20 is pyod's default."""
     features = df[FEATURE_COLUMNS].fillna(0)
 
-    model = LOF(contamination=contamination)
+    model = LOF(contamination=contamination, n_neighbors=n_neighbors)
     model.fit(features)
 
     # pyod convention: 1 = anomaly, 0 = normal
