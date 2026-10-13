@@ -1,4 +1,5 @@
-from fastapi import Depends, FastAPI, HTTPException, APIRouter
+from fastapi import Depends, FastAPI, HTTPException, APIRouter, Request
+from fastapi.responses import JSONResponse
 from app.db import fetch_usage_events, fetch_pool_balance_consistency
 from app.features import add_duplicate_features, add_lag_feature, add_zscore_features
 from app.model import train_isolation_forest, train_lof, explain_with_shap
@@ -8,9 +9,17 @@ from app.registry import train_and_register, load_latest_model
 from app.consistency import check_pool_consistency
 from app.scoring import score_event
 from app.auth import require_api_key
+from app.lineage import ModelIntegrityError
 
 
 app = FastAPI()
+
+
+@app.exception_handler(ModelIntegrityError)
+def model_integrity_error(request: Request, exc: ModelIntegrityError):
+    # refuse to serve rather than report the wrong model's id and metrics;
+    # POST /train writes a fresh model and a matching record
+    return JSONResponse(status_code=503, content={"detail": f"{exc} — call POST /train to replace it"})
 
 # Every route on this router requires a valid X-API-Key header (see
 # app/auth.py). These endpoints expose internals (raw feature values,

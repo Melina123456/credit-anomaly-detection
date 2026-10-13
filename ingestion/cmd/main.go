@@ -18,8 +18,8 @@ import (
 
 // newRNG builds the single *rand.Rand threaded through every generator call.
 // SEED makes a run reproducible; without it, results still work but can't be
-// replayed, so the resolved seed is always logged.
-func newRNG() *rand.Rand {
+// replayed, so the resolved seed is always logged and returned.
+func newRNG() (*rand.Rand, int64) {
 	seed := time.Now().UnixNano()
 	if raw := os.Getenv("SEED"); raw != "" {
 		parsed, err := strconv.ParseInt(raw, 10, 64)
@@ -29,7 +29,7 @@ func newRNG() *rand.Rand {
 		seed = parsed
 	}
 	log.Printf("generator RNG seed: %d (set SEED=%d to reproduce this run)", seed, seed)
-	return rand.New(rand.NewSource(seed))
+	return rand.New(rand.NewSource(seed)), seed
 }
 
 // defaultReferenceTime is fixed rather than time.Now(): every generated
@@ -110,7 +110,7 @@ func main() {
 		return
 	}
 
-	rng := newRNG()
+	rng, seed := newRNG()
 	ref := referenceTime()
 	counts := anomalyCounts()
 
@@ -147,6 +147,10 @@ func main() {
 		log.Fatalf("anomaly insertion failed: %v", err)
 	}
 	log.Printf("inserted and labeled %d anomalies", anomalyCount)
+
+	if err := generator.RecordGeneration(ctx, pgPool, seed, ref, counts, len(events)+anomalyCount); err != nil {
+		log.Fatalf("recording dataset generation failed: %v", err)
+	}
 
 	// Anomaly rows are usage events too, so they need debits and cache entries
 	// of their own — otherwise a single seeding run leaves them unledgered.

@@ -41,7 +41,7 @@ def fetch_usage_events() -> pd.DataFrame:
 
 def fetch_usage_events_with_labels() -> pd.DataFrame:
     query = """
-        SELECT ue.*, al.anomaly_type
+        SELECT ue.*, al.anomaly_type, t.name AS tenant_name, f.key AS feature_key
         FROM usage_event ue
         LEFT JOIN anomaly_label al ON al.usage_event_id = ue.id
     """ + _EVENT_ORDER
@@ -119,17 +119,21 @@ def fetch_duplicate_count(tenant_id, feature_id, quantity, occurred_at) -> int:
 
 
 def insert_model_run(model_path, feature_set, training_row_count, contamination,
-                      precision_score, recall_score, f1_score):
+                      precision_score, recall_score, f1_score,
+                      data_sha256=None, model_sha256=None, git_commit=None,
+                      dataset_generation_id=None):
     """Persist one training run and return the inserted row (id, trained_at)."""
     with get_engine().begin() as conn:
         result = conn.execute(
             text("""
                 INSERT INTO model_run
                     (model_path, feature_set, training_row_count, contamination,
-                     precision_score, recall_score, f1_score)
+                     precision_score, recall_score, f1_score,
+                     data_sha256, model_sha256, git_commit, dataset_generation_id)
                 VALUES
                     (:model_path, :feature_set, :training_row_count, :contamination,
-                     :precision_score, :recall_score, :f1_score)
+                     :precision_score, :recall_score, :f1_score,
+                     :data_sha256, :model_sha256, :git_commit, :dataset_generation_id)
                 RETURNING id, trained_at
             """),
             {
@@ -140,6 +144,10 @@ def insert_model_run(model_path, feature_set, training_row_count, contamination,
                 "precision_score": precision_score,
                 "recall_score": recall_score,
                 "f1_score": f1_score,
+                "data_sha256": data_sha256,
+                "model_sha256": model_sha256,
+                "git_commit": git_commit,
+                "dataset_generation_id": dataset_generation_id,
             },
         )
         return result.fetchone()
@@ -151,11 +159,21 @@ def fetch_latest_model_run():
     with get_engine().connect() as conn:
         result = conn.execute(
             text("""
-                SELECT id, trained_at, model_path, feature_set, training_row_count,
-                       precision_score, recall_score, f1_score
-                FROM model_run
-                ORDER BY trained_at DESC
+                SELECT mr.id, mr.trained_at, mr.model_path, mr.feature_set,
+                       mr.training_row_count, mr.precision_score, mr.recall_score,
+                       mr.f1_score, mr.data_sha256, mr.model_sha256, mr.git_commit,
+                       dg.seed, dg.reference_time, dg.anomaly_counts
+                FROM model_run mr
+                LEFT JOIN dataset_generation dg ON dg.id = mr.dataset_generation_id
+                ORDER BY mr.trained_at DESC
                 LIMIT 1
             """)
         )
         return result.fetchone()
+
+def fetch_latest_dataset_generation_id():
+    """id of the most recent dataset the generator recorded, or None if the
+    data predates generation records."""
+    with get_engine().connect() as conn:
+        result = conn.execute(text("SELECT max(id) FROM dataset_generation"))
+        return result.scalar()

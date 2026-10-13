@@ -32,7 +32,12 @@ services:
       SEED: ${SEED:-42}
 
   ai-service:
-    build: ./ai-service
+    build:
+      context: ./ai-service
+      args:
+        # e.g. `GIT_COMMIT=$(git describe --always --dirty) docker compose up --build`;
+        # stored on every model_run row, left empty when not given
+        GIT_COMMIT: ${GIT_COMMIT:-}
     depends_on:
       postgres:
         condition: service_healthy
