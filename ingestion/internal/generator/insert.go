@@ -23,3 +23,13 @@ func InsertEvents(ctx context.Context, pool *pgxpool.Pool, events []EventSpec, i
 	}
 	return nil
 }
+
+// RecordGeneration stores the settings that produced the current dataset, so
+// a trained model can be traced back to a seed that regenerates its data.
+func RecordGeneration(ctx context.Context, pool *pgxpool.Pool, seed int64, ref time.Time, counts AnomalyCounts, eventCount int) error {
+	_, err := pool.Exec(ctx, `
+		INSERT INTO dataset_generation (seed, reference_time, anomaly_counts, event_count)
+		VALUES ($1, $2, $3, $4)
+	`, seed, ref, counts.String(), eventCount)
+	return err
+}

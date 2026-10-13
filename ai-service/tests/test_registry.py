@@ -7,6 +7,10 @@ import pytest
 
 from app.registry import train_and_register, _row_to_metadata
 
+# lineage columns as they come back for a run recorded before lineage existed
+NO_LINEAGE = dict(data_sha256=None, model_sha256=None, git_commit=None,
+                  seed=None, reference_time=None, anomaly_counts=None)
+
 
 def test_train_and_register_rejects_empty_dataframe():
     # guards against ever fitting IsolationForest on zero rows, which
@@ -29,6 +33,7 @@ def test_row_to_metadata_converts_db_row_into_plain_dict():
         precision_score=Decimal("0.753"),
         recall_score=Decimal("1.0"),
         f1_score=Decimal("0.859"),
+        **NO_LINEAGE,
     )
 
     metadata = _row_to_metadata(row)
@@ -52,6 +57,7 @@ def test_row_to_metadata_handles_null_metrics():
         precision_score=None,
         recall_score=None,
         f1_score=None,
+        **NO_LINEAGE,
     )
 
     metadata = _row_to_metadata(row)
