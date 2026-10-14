@@ -286,8 +286,9 @@ count, so this measures the ranking itself):
   *k* moves the cliff; it doesn't remove it, and on real data the group sizes
   aren't known in advance — the same problem as the contamination setting.
 - **GLOSH fails the same way through `min_pts`**, which it chooses from the
-  data at about 12. At 15 spikes it caught them on all 9 datasets where it
-  chose `min_pts` ≥ 14 and missed them on all 4 where it chose ≤ 11.
+  data at about 12. At 15 spikes it caught all 15 on the 10 datasets where it
+  chose `min_pts` ≥ 14, caught at most 1 of 15 on the 4 where it chose ≤ 11,
+  and caught all 15 on 3 of the 6 where it chose 13.
 - **This qualifies the LOF result above.** The default dataset's largest group
   is 15, just below *k* = 20. At 25 spikes the order flips: F1 0.83 for
   Isolation Forest against 0.56 for LOF.
