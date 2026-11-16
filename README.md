@@ -52,9 +52,15 @@ materialized read caches, rebuilt from the ledger — never edited directly.
 `/analyze` does **not** train a model per request. Instead:
 
 - `POST /train` fits `IsolationForest` on the current data, evaluates it, saves the fitted model to disk (`joblib`), and records the run — when, on how much data, with what precision/recall/F1 — as a row in the `model_run` table.
-- `GET /model/current` returns that record: a minimal "model card" for whatever's currently being served.
+- `GET /model/current` returns that record: a minimal "model card" for whatever's currently being served, including its lineage (below).
 - `GET /analyze/{event_id}` loads the most recently trained model and scores against it. If nothing has been trained yet, it returns `503` rather than silently training one — the point of separating train from serve is that scoring is never allowed to accidentally trigger training.
 - Every `/analyze` response includes `model_id`, the `model_run` row that produced it — so a result can always be traced back to exactly which trained model made the call, and cross-checked against `GET /model/current` or the run history in `model_run`. This doesn't add pinning or rollback (see Known limitations) — it just makes "which model said this" answerable instead of assumed.
+- Each `model_run` row also records what the model came from:
+  - `data_sha256` — a hash of the training events' content. Rows are sorted first and database ids left out (they're random UUIDs), so two databases holding the same events give the same hash, whatever order they were inserted in.
+  - `dataset_generation_id` — the seed, reference time and anomaly counts that generated the data (`dataset_generation` table), enough to regenerate it exactly.
+  - `git_commit` — the commit the image was built from, passed in at build time since containers have no `.git`: `GIT_COMMIT=$(git describe --always --dirty) docker compose up --build`. Left empty when not given.
+  - `model_sha256` — a hash of the saved model file.
+- **A changed model file is refused, not served.** On load, if the file's hash no longer matches `model_sha256`, every endpoint that needs the model returns `503` instead of scoring — serving it would attach this run's id, metrics and lineage to a model they don't describe. Verified by appending one byte to a saved model: `/model/current` returned `503` until the file was restored. Runs recorded before hashing was added have no `model_sha256` and are loaded without the check.
 - The model file lives in a named Docker volume (`ai_models`, mounted at `/app/models`), so it survives a container restart or even the container being removed and recreated — verified by actually doing that and re-checking `/model/current`, not assumed.
 
 The `/debug/*` endpoints are unchanged — they still fit a fresh, throwaway model on every call, deliberately. They exist for exploring the data and the model live, not for serving; `/train` and `/analyze` are the only path that reads and writes the persisted model.
@@ -112,7 +118,7 @@ curl -H "X-API-Key: local-dev-only-key" http://localhost:8000/debug/consistency-
 There's a GitHub Actions workflow (`.github/workflows/ci.yml`) that runs on every push and pull request:
 
 - **Go** — `go vet` + `go test ./...` for the ingestion module. Tests cover the synthetic-data generator (`internal/generator`): event counts, the documented value ranges for each anomaly type (e.g. spikes are 10x-20x baseline), and edge cases like an empty event list or an unrecognized plan tier.
-- **Python** — `pytest` for the AI service. Tests cover the pure feature-engineering and evaluation logic (`features.py`, `evaluate.py`, `analyze.py`, `registry.py`, `consistency.py`, `scoring.py`, `auth.py`, `threshold.py`, `glosh.py`): the robust z-score math (both the bulk/training version and the single-event version used by `/analyze` — pinned to agree with each other), duplicate detection, SHAP-reason selection, per-anomaly-type recall, ledger/cache mismatch detection, and edge cases like a tenant whose usage never varies (zero MAD), a model that flags nothing at all (zero-division in precision/recall), training being called with no data, or the API key being missing/wrong/unconfigured (fail-closed, verified by test). All database access for the AI service is centralized in `db.py`, and all Redis access in `cache.py` — other modules describe *what* they need ("the latest model run," "this tenant's cached baseline") without knowing *how* it's fetched, which is what keeps this pure-logic layer testable without either infrastructure running at all.
+- **Python** — `pytest` for the AI service. Tests cover the pure feature-engineering and evaluation logic (`features.py`, `evaluate.py`, `analyze.py`, `registry.py`, `lineage.py`, `consistency.py`, `scoring.py`, `auth.py`, `threshold.py`, `glosh.py`): the robust z-score math (both the bulk/training version and the single-event version used by `/analyze` — pinned to agree with each other), duplicate detection, SHAP-reason selection, per-anomaly-type recall, ledger/cache mismatch detection, the training-data fingerprint (unchanged by row order or database ids, changed by a single quantity or label), the model-file hash check, and edge cases like a tenant whose usage never varies (zero MAD), a model that flags nothing at all (zero-division in precision/recall), training being called with no data, or the API key being missing/wrong/unconfigured (fail-closed, verified by test). All database access for the AI service is centralized in `db.py`, and all Redis access in `cache.py` — other modules describe *what* they need ("the latest model run," "this tenant's cached baseline") without knowing *how* it's fetched, which is what keeps this pure-logic layer testable without either infrastructure running at all.
 
 Run them locally:
 
@@ -354,7 +360,9 @@ API-key protection on internal endpoints.
 Experimental phase: reproducible 20-seed evaluation, contamination sweep,
 Isolation Forest vs LOF, and three ways of choosing the cutoff from the scores
 (including the GLOSH/POLAR method from Ghosh et al., 2024), and how each
-detector breaks as same-type anomalies group together.
+detector breaks as same-type anomalies group together. Each trained model now
+records the data, seed, code commit and file hash it came from, and a model
+file that no longer matches its record is refused rather than served.
 
 ## Known limitations
 
@@ -373,7 +381,7 @@ Being upfront about what this is *not* yet, since that matters more than the par
   types changed together. Real anomalies might be more scattered, or group
   differently.
 - **Nothing triggers `/train` automatically.** There's no scheduled retraining and no auto-train-on-first-boot — you have to call `POST /train` yourself after data exists. That's intentional for now (an accidental training run on empty or partial data is worse than an explicit `503`), but a real deployment would want a scheduled job or a "retrain if data has grown by X%" trigger.
-- **No model versioning beyond "latest."** Every `/train` call adds a new row to `model_run` and a new file on disk (nothing is overwritten), and `/analyze` now reports which run's model (`model_id`) produced each result — but `/analyze` still only ever *scores against* the single most recent one, and there's no way to pin, compare, or roll back to an older model. The history is there in the table; nothing but the last row is ever served.
+- **No model versioning beyond "latest."** Every `/train` call adds a new row to `model_run` and a new file on disk (nothing is overwritten), each with its lineage, and `/analyze` reports which run's model (`model_id`) produced each result — but `/analyze` still only ever *scores against* the single most recent one, and there's no way to pin, compare, or roll back to an older model, or to say whether a retrained model is a compatible change. The history is there in the table; nothing but the last row is ever served.
 - **The baseline cache has no invalidation beyond the next `/train`.** If a brand-new tenant or feature gets seeded after the last training run, `/analyze` will correctly refuse with a 503 for it (no cached baseline) rather than guess — but that means it's stale-by-construction between training runs, same as the model itself. This is the same "nothing triggers `/train` automatically" limitation above, just visible in a second place now.
 - **`ADMIN_API_KEY` is one shared static key**, not per-user auth — fine for gating dev-only endpoints today, not a substitute for real access control if this ever served more than one trusted operator. See [Protecting internal endpoints](#protecting-internal-endpoints) above.
 - **Test coverage stops at the database boundary** — see [Testing & CI](#testing--ci) above.
